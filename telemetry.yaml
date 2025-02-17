@@ -1,0 +1,19 @@
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  metrics:
+    - providers:
+        - name: prometheus
+      overrides:
+        - match:
+            # metric: REQUEST_COUNT
+            metric: ALL_METRICS # https://istio.io/latest/docs/reference/config/telemetry/#MetricSelector-IstioMetric
+            mode: CLIENT_AND_SERVER # https://istio.io/latest/docs/reference/config/telemetry/#WorkloadMode
+          tagOverrides:
+            request_method:
+              value: request.method
+            request_path:
+              value: request.headers['x-openapi-path']
