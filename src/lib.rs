@@ -1,88 +1,123 @@
-use std::sync::Arc;
-use proxy_wasm::{
-    traits::{Context, HttpContext, RootContext},
-    types::*,
-};
+use log::{error, info, warn};
+use proxy_wasm::traits::*;
+use proxy_wasm::types::*;
 use serde_json::Value;
+use std::sync::Arc;
 use matchit::Router;
-use log::{info};
-// use log::{info, warn, error};
 
+// 플러그인 초기화
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(OpenapiPathRootContext {
-            router: Arc::new(Router::new()), // Arc 사용
-        })
+        Box::new(OpenapiPathRootContext::default())
     });
 }}
 
-struct OpenapiPathHttpContext {
-    router: Arc<Router<String>>, // Arc로 공유
-}
-
-impl Context for OpenapiPathHttpContext {}
-
-impl HttpContext for OpenapiPathHttpContext {
-    fn on_http_request_headers(&mut self, _: usize, _: bool) -> Action {
-        if let Some(path) = self.get_http_request_header(":path") {
-            match self.router.at(&path) {
-                Ok(matched) => {
-                    let openapi_path = matched.value;
-                    self.set_http_request_header("x-openapi-path", Some(&openapi_path));
-                }
-                Err(_) => {
-                    // Handle unmatched routes (optional)
-                }
-            }
-        }
-        Action::Continue
-    }
-}
-
+#[derive(Default)]
 struct OpenapiPathRootContext {
-    router: Arc<Router<String>>, // Arc 사용
+    router: Arc<Router<String>>,
 }
 
 impl Context for OpenapiPathRootContext {}
 
 impl RootContext for OpenapiPathRootContext {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("openapi-path-filter successfully created and started!");
+        info!("OpenAPI path filter initialized");
         true
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
-        // Get plugin configuration
-        if let Some(config_bytes) = self.get_plugin_configuration() {
-            let config_str = String::from_utf8(config_bytes.to_vec()).unwrap_or_default();
-            let config_json: Value = serde_json::from_str(&config_str).unwrap_or_default();
-
-            // Parse OpenAPI paths
-            let mut new_router = Router::new();
-            if let Some(paths) = config_json.get("paths").and_then(Value::as_object) {
-                for (path, _) in paths {
-                    if let Err(e) = new_router.insert(path.clone(), path.clone()) {
-                        info!("Failed to insert route: {e}");
-                    }
-                }
+        match self.configure_router() {
+            Ok(_) => true,
+            Err(e) => {
+                error!("Failed to configure router: {}", e);
+                false
             }
-
-            // 새로운 Router를 Arc로 감싸서 기존 것을 교체
-            self.router = Arc::new(new_router);
-            true
-        } else {
-            false
         }
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
         Some(Box::new(OpenapiPathHttpContext {
-            router: Arc::clone(&self.router), // Arc clone 사용
+            router: Arc::clone(&self.router),
         }))
     }
 
     fn get_type(&self) -> Option<ContextType> {
         Some(ContextType::HttpContext)
     }
+}
+
+impl OpenapiPathRootContext {
+    fn configure_router(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let config_bytes = self.get_plugin_configuration()
+            .ok_or("No plugin configuration found")?;
+
+        let config_str = String::from_utf8(config_bytes)?;
+        let config: Value = serde_json::from_str(&config_str)?;
+
+        let paths = config.get("paths")
+            .and_then(Value::as_object)
+            .ok_or("Invalid or missing 'paths' in configuration")?;
+
+        let mut new_router = Router::new();
+        for (path, _) in paths {
+            new_router.insert(path, path.clone())
+                .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
+        }
+
+        self.router = Arc::new(new_router);
+        info!("Router configured successfully with {} paths", paths.len());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct OpenapiPathHttpContext {
+    router: Arc<Router<String>>,
+}
+
+impl Context for OpenapiPathHttpContext {}
+
+impl HttpContext for OpenapiPathHttpContext {
+    fn on_http_request_headers(&mut self, _: usize, _: bool) -> Action {
+        match self.process_request_path() {
+            Ok(_) => Action::Continue,
+            Err(e) => {
+                warn!("Error processing request path: {}", e);
+                Action::Continue
+            }
+        }
+    }
+}
+
+impl OpenapiPathHttpContext {
+    fn process_request_path(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.get_http_request_header(":path")
+            .ok_or("No path header found")?;
+
+        match self.router.at(&path) {
+            Ok(matched) => {
+                self.set_http_request_header("x-openapi-path", Some(matched.value));
+                Ok(())
+            }
+            Err(e) => {
+                // 매칭되지 않는 경로는 warning으로 처리
+                warn!("Path '{}' not found in OpenAPI spec: {}", path, e);
+                Ok(())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_root_context() {
+        let context = OpenapiPathRootContext::default();
+        assert!(context.router.at("/").is_err()); // 기본 라우터는 비어있어야 함
+    }
+
+    // 더 많은 테스트 케이스 추가 가능
 }

@@ -1,12 +1,17 @@
-# Elikas RUST
+# openapi-path-filter
+
+## Introduction
+
+A Rust-based Istio WASM filter that injects a Prometheus label representing the request path, based on a path defined in the OpenAPI spec.
 
 ## TODO
 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
-- 🚧 동적 `WasmPlugin` 로딩 테스트: configuration 동적 업데이트
-- [FIX] log가 안찍힘
 - [최적화] Rust 언어 관점, biz logic 관점
+  - LRU 캐시 도입: 용도에 맞는 default size를 configuration에서 조절
+  - 동기화 비용 최소화: cache 업데이트 비용 최소화
+- [단위 테스트] 전체 테스트 범위 중 단위 테스트 극대화
 
 ## Getting started
 
