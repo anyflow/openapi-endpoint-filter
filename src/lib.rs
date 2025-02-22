@@ -51,7 +51,10 @@ impl OpenapiPathRootContext {
     fn configure_router(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let config_bytes = self.get_plugin_configuration()
             .ok_or("No plugin configuration found")?;
+        self.configure_router_with_bytes(config_bytes)
+    }
 
+    fn configure_router_with_bytes(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         let config_str = String::from_utf8(config_bytes)?;
         let config: Value = serde_json::from_str(&config_str)?;
 
@@ -109,6 +112,7 @@ impl OpenapiPathHttpContext {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +123,59 @@ mod tests {
         assert!(context.router.at("/").is_err()); // 기본 라우터는 비어있어야 함
     }
 
-    // 더 많은 테스트 케이스 추가 가능
+    #[test]
+    fn test_valid_configuration() {
+        let mut context = OpenapiPathRootContext::default();
+        let config = serde_json::json!({
+            "paths": {
+                "/api/v1/users": {},
+                "/api/v1/products/{id}": {}
+            }
+        });
+        let config_bytes = serde_json::to_vec(&config).unwrap();
+
+        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
+        assert!(context.router.at("/api/v1/users").is_ok());
+        assert!(context.router.at("/api/v1/products/123").is_ok());
+        assert!(context.router.at("/invalid/path").is_err());
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let mut context = OpenapiPathRootContext::default();
+        let invalid_config = b"{invalid json}".to_vec();
+
+        assert!(context.configure_router_with_bytes(invalid_config).is_err());
+    }
+
+    #[test]
+    fn test_missing_paths() {
+        let mut context = OpenapiPathRootContext::default();
+        let config = serde_json::json!({
+            "other_field": "value"
+        });
+        let config_bytes = serde_json::to_vec(&config).unwrap();
+
+        assert!(context.configure_router_with_bytes(config_bytes).is_err());
+    }
+
+    #[test]
+    fn test_path_parameter_matching() {
+        let mut context = OpenapiPathRootContext::default();
+        let config = serde_json::json!({
+            "paths": {
+                "/api/users/{id}": {},
+                "/api/orders/{orderId}/items/{itemId}": {}
+            }
+        });
+        let config_bytes = serde_json::to_vec(&config).unwrap();
+
+        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
+
+        let match_result = context.router.at("/api/users/123").unwrap();
+        assert_eq!(match_result.value, "/api/users/{id}");
+
+        let match_result = context.router.at("/api/orders/456/items/789").unwrap();
+        assert_eq!(match_result.value, "/api/orders/{orderId}/items/{itemId}");
+    }
 }
