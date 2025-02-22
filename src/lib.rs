@@ -82,9 +82,13 @@ struct OpenapiPathHttpContext {
 impl Context for OpenapiPathHttpContext {}
 
 impl HttpContext for OpenapiPathHttpContext {
-    fn on_http_request_headers(&mut self, _: usize, _: bool) -> Action {
-        match self.process_request_path() {
-            Ok(_) => Action::Continue,
+    fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
+        let path = self.get_http_request_header(":path").unwrap_or_default();
+        match self.process_request_path(&path) {
+            Ok(matched_value) => {
+                self.set_http_request_header("x-openapi-path", Some(matched_value));
+                Action::Continue
+            }
             Err(e) => {
                 warn!("Error processing request path: {}", e);
                 Action::Continue
@@ -94,19 +98,13 @@ impl HttpContext for OpenapiPathHttpContext {
 }
 
 impl OpenapiPathHttpContext {
-    fn process_request_path(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.get_http_request_header(":path")
-            .ok_or("No path header found")?;
-
-        match self.router.at(&path) {
-            Ok(matched) => {
-                self.set_http_request_header("x-openapi-path", Some(matched.value));
-                Ok(())
-            }
+    /// Processes the request path against the router without relying on HttpContext methods.
+    fn process_request_path(&self, path: &str) -> Result<&str, Box<dyn std::error::Error>> {
+        match self.router.at(path) {
+            Ok(matched) => Ok(matched.value),
             Err(e) => {
-                // 매칭되지 않는 경로는 warning으로 처리
                 warn!("Path '{}' not found in OpenAPI spec: {}", path, e);
-                Ok(())
+                Ok("") // 기본값 반환
             }
         }
     }
