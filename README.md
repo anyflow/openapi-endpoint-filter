@@ -9,9 +9,9 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
 - [최적화] Rust 언어 관점, biz logic 관점
-  - LRU 캐시 도입: 용도에 맞는 default size를 configuration에서 조절
-  - 동기화 비용 최소화: cache 업데이트 비용 최소화
-- [단위 테스트] 전체 테스트 범위 중 단위 테스트 극대화
+  - ✅ LRU 캐시 도입: 용도에 맞는 default size를 configuration에서 조절
+  - ✅ 동기화 비용 최소화: cache 업데이트 비용 - `std::Mutex` 대신 `parking_lot::Mutex` 사용
+- ✅ [단위 테스트] path matching, cache hit
 - `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록
 
 ## Getting started

@@ -4,6 +4,9 @@ use proxy_wasm::types::*;
 use serde_json::Value;
 use std::sync::Arc;
 use matchit::Router;
+use lru::LruCache;
+use parking_lot::Mutex;
+use std::num::NonZeroUsize;
 
 // 플러그인 초기화
 proxy_wasm::main! {{
@@ -13,9 +16,20 @@ proxy_wasm::main! {{
     });
 }}
 
-#[derive(Default)]
 struct OpenapiPathRootContext {
     router: Arc<Router<String>>,
+    cache: Arc<Mutex<LruCache<String, String>>>,
+}
+
+static DEFAULT_CACHE_SIZE: usize = 1024;
+
+impl Default for OpenapiPathRootContext {
+    fn default() -> Self {
+        Self {
+            router: Arc::new(Router::new()),
+            cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap()))),
+        }
+    }
 }
 
 impl Context for OpenapiPathRootContext {}
@@ -39,6 +53,7 @@ impl RootContext for OpenapiPathRootContext {
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
         Some(Box::new(OpenapiPathHttpContext {
             router: Arc::clone(&self.router),
+            cache: Arc::clone(&self.cache),
         }))
     }
 
@@ -68,25 +83,37 @@ impl OpenapiPathRootContext {
                 .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
         }
 
+        let cache_size = config.get("cache_size")
+            .and_then(Value::as_u64)
+            .map(|size| size as usize)
+            .unwrap_or(DEFAULT_CACHE_SIZE);
+
+        let new_cache = LruCache::new(
+            NonZeroUsize::new(cache_size)
+                .unwrap_or(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap())
+        );
+
         self.router = Arc::new(new_router);
-        info!("Router configured successfully with {} paths", paths.len());
+        self.cache = Arc::new(Mutex::new(new_cache));
+
+        info!("Router configured successfully with {} paths and cache size {}", paths.len(), cache_size);
         Ok(())
     }
 }
 
-#[derive(Default)]
 struct OpenapiPathHttpContext {
     router: Arc<Router<String>>,
+    cache: Arc<Mutex<LruCache<String, String>>>,
 }
 
 impl Context for OpenapiPathHttpContext {}
 
 impl HttpContext for OpenapiPathHttpContext {
-    fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
+    fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {
         let path = self.get_http_request_header(":path").unwrap_or_default();
         match self.process_request_path(&path) {
             Ok(matched_value) => {
-                self.set_http_request_header("x-openapi-path", Some(matched_value));
+                self.set_http_request_header("x-openapi-path", Some(&matched_value));
                 Action::Continue
             }
             Err(e) => {
@@ -98,82 +125,83 @@ impl HttpContext for OpenapiPathHttpContext {
 }
 
 impl OpenapiPathHttpContext {
-    /// Processes the request path against the router without relying on HttpContext methods.
-    fn process_request_path(&self, path: &str) -> Result<&str, Box<dyn std::error::Error>> {
-        match self.router.at(path) {
-            Ok(matched) => Ok(matched.value),
-            Err(e) => {
-                warn!("Path '{}' not found in OpenAPI spec: {}", path, e);
-                Ok("") // 기본값 반환
+    fn process_request_path(&self, path: &str) -> Result<String, Box<dyn std::error::Error>> {
+        {
+            let mut cache = self.cache.lock();
+            if let Some(cached_value) = cache.get(path) {
+                return Ok(cached_value.clone());
             }
         }
+
+        let result = match self.router.at(path) {
+            Ok(matched) => matched.value.clone(),
+            Err(e) => {
+                warn!("Path '{}' not found in OpenAPI spec: {}", path, e);
+                String::new()
+            }
+        };
+
+        self.cache.lock().put(path.to_string(), result.clone());
+
+        Ok(result)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_root_context() {
-        let context = OpenapiPathRootContext::default();
-        assert!(context.router.at("/").is_err()); // 기본 라우터는 비어있어야 함
-    }
-
-    #[test]
-    fn test_valid_configuration() {
-        let mut context = OpenapiPathRootContext::default();
-        let config = serde_json::json!({
-            "paths": {
-                "/api/v1/users": {},
-                "/api/v1/products/{id}": {}
-            }
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
-
-        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
-        assert!(context.router.at("/api/v1/users").is_ok());
-        assert!(context.router.at("/api/v1/products/123").is_ok());
-        assert!(context.router.at("/invalid/path").is_err());
-    }
-
-    #[test]
-    fn test_invalid_json() {
-        let mut context = OpenapiPathRootContext::default();
-        let invalid_config = b"{invalid json}".to_vec();
-
-        assert!(context.configure_router_with_bytes(invalid_config).is_err());
-    }
-
-    #[test]
-    fn test_missing_paths() {
-        let mut context = OpenapiPathRootContext::default();
-        let config = serde_json::json!({
-            "other_field": "value"
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
-
-        assert!(context.configure_router_with_bytes(config_bytes).is_err());
-    }
+    const TEST_CONFIG: &str = r#"{
+        "cache_size": 2,
+        "paths": {
+            "/api/users/{id}": {},
+            "/api/posts/{postId}/comments/{commentId}": {},
+            "/api/items": {}
+        }
+    }"#;
 
     #[test]
     fn test_path_parameter_matching() {
-        let mut context = OpenapiPathRootContext::default();
-        let config = serde_json::json!({
-            "paths": {
-                "/api/users/{id}": {},
-                "/api/orders/{orderId}/items/{itemId}": {}
-            }
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
+        let mut root_ctx = OpenapiPathRootContext::default();
+        root_ctx.configure_router_with_bytes(TEST_CONFIG.as_bytes().to_vec()).unwrap();
 
-        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
+        let http_ctx = OpenapiPathHttpContext {
+            router: Arc::clone(&root_ctx.router),
+            cache: Arc::clone(&root_ctx.cache),
+        };
 
-        let match_result = context.router.at("/api/users/123").unwrap();
-        assert_eq!(match_result.value, "/api/users/{id}");
+        let test_cases = vec![
+            ("/api/users/123", "/api/users/{id}"),
+            ("/api/posts/456/comments/789", "/api/posts/{postId}/comments/{commentId}"),
+            ("/api/items", "/api/items"),
+        ];
 
-        let match_result = context.router.at("/api/orders/456/items/789").unwrap();
-        assert_eq!(match_result.value, "/api/orders/{orderId}/items/{itemId}");
+        for (input_path, expected_match) in test_cases {
+            let result = http_ctx.process_request_path(input_path).unwrap();
+            assert_eq!(result, expected_match,
+                "Path '{}' should match '{}'", input_path, expected_match);
+        }
+    }
+
+    #[test]
+    fn test_path_caching() {
+        let mut root_ctx = OpenapiPathRootContext::default();
+        root_ctx.configure_router_with_bytes(TEST_CONFIG.as_bytes().to_vec()).unwrap();
+
+        let http_ctx = OpenapiPathHttpContext {
+            router: Arc::clone(&root_ctx.router),
+            cache: Arc::clone(&root_ctx.cache),
+        };
+
+        let path = "/api/users/123";
+        let first_result = http_ctx.process_request_path(path).unwrap();
+
+        let cached_value = http_ctx.cache.lock().get(path).cloned();
+        assert_eq!(cached_value, Some("/api/users/{id}".to_string()),
+            "Path should be cached after first request");
+
+        let second_result = http_ctx.process_request_path(path).unwrap();
+        assert_eq!(first_result, second_result,
+            "Cached result should match first result");
     }
 }

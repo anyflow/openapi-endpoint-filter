@@ -9,6 +9,7 @@ spec:
       app: gateway
   url: docker-registry.anyflow.net/openapi-path-filter:latest
   pluginConfig:
+    cache_size: 1024 # default
     paths:
       /dockebi/v1/stuff: {}
       /dockebi/v1/stuff/{id_}: {}
