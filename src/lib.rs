@@ -26,8 +26,16 @@ impl RootContext for OpenapiPathRootContext {
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
-        debug!("Configuring OpenAPI path filter");
-        match self.configure_router() {
+        debug!("Configuring openapi-path-filter");
+        let config_bytes = match self.get_plugin_configuration() {
+            Some(bytes) => bytes,
+            None => {
+                error!("No plugin configuration found");
+                return false;
+            }
+        };
+
+        match self.configure_router(config_bytes) {
             Ok(_) => {
                 info!("Router configured successfully");
                 true
@@ -52,14 +60,7 @@ impl RootContext for OpenapiPathRootContext {
 }
 
 impl OpenapiPathRootContext {
-    fn configure_router(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("Retrieving plugin configuration");
-        let config_bytes = self.get_plugin_configuration()
-            .ok_or("No plugin configuration found")?;
-        self.configure_router_with_bytes(config_bytes)
-    }
-
-    fn configure_router_with_bytes(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+    fn configure_router(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         debug!("Configuring router with bytes: {} bytes", config_bytes.len());
         let config_str = String::from_utf8(config_bytes)?;
         let config: Value = serde_json::from_str(&config_str)?;
@@ -136,7 +137,7 @@ mod tests {
     #[test]
     fn test_path_parameter_matching() {
         let mut root_ctx = OpenapiPathRootContext::default();
-        root_ctx.configure_router_with_bytes(TEST_CONFIG.as_bytes().to_vec()).unwrap();
+        root_ctx.configure_router(TEST_CONFIG.as_bytes().to_vec()).unwrap();
 
         let http_ctx = OpenapiPathHttpContext {
             router: Arc::clone(&root_ctx.router)
@@ -160,7 +161,7 @@ mod tests {
         let mut context = OpenapiPathRootContext::default();
         let invalid_config = b"{invalid json}".to_vec();
 
-        assert!(context.configure_router_with_bytes(invalid_config).is_err());
+        assert!(context.configure_router(invalid_config).is_err());
     }
 
     #[test]
@@ -171,6 +172,6 @@ mod tests {
         });
         let config_bytes = serde_json::to_vec(&config).unwrap();
 
-        assert!(context.configure_router_with_bytes(config_bytes).is_err());
+        assert!(context.configure_router(config_bytes).is_err());
     }
 }

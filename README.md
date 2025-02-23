@@ -9,7 +9,8 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
 - ✅ build 자동화: cargo-make 사용
-- 💧 LRU 캐시 도입: lru cache 사용이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 큼. 복잡도 증가. `cache` branch 참조
+- ✅ cargo/docker image version 자동 동기화(`${CARGO_MAKE_CRATE_VERSION}` in `Makefile.toml`)
+- 💧 LRU 캐시 도입: lru cache 사용이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 크고 복잡도가 증가. `cache` branch 참조.
 - [단위 테스트] 전체 테스트 범위 중 단위 테스트 극대화
 - `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록
 
@@ -25,17 +26,11 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 # Rust 설치. 참고로 macOS에서 brew로 설치하면 정상 compile안됨. 따라서 Rust 공식 설치 Path를 따라야.
 > curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# target 설치
-> rustup target add wasm32-unknown-unknown
+# cargo-make 설치 (빌드 도구. Makefile.toml 참고)
+> cargo install cargo-make
 
-# build
-> cargo build --target wasm32-unknown-unknown --release
-
-# docker build
-> docker build -t docker-registry.anyflow.net/openapi-path-filter:latest .
-
-# docker push
-> docker push docker-registry.anyflow.net/openapi-path-filter:latest
+# test -> rust build -> docker build -> docker push
+> cargo make clean-all
 
 # 정상 등록 여부 확인
 > curl -X GET https://docker-registry.anyflow.net/v2/openapi-path-filter/manifests/latest \

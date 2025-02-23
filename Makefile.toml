@@ -23,7 +23,7 @@ command = "docker"
 args = ["push", "${IMAGE}"]
 
 [tasks.all]
-dependencies = ["build-wasm", "test", "docker-build", "docker-push"]
+dependencies = ["test", "build-wasm", "docker-build", "docker-push"]
 
 [tasks.clean-all]
 dependencies = ["clean", "all"]
