@@ -8,11 +8,16 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
-- [최적화] Rust 언어 관점, biz logic 관점
-  - LRU 캐시 도입: 용도에 맞는 default size를 configuration에서 조절
-  - 동기화 비용 최소화: cache 업데이트 비용 최소화
+- ✅ build 자동화: cargo-make 사용
+- 💧 LRU 캐시 도입: lru cache 사용이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 큼. 복잡도 증가. `cache` branch 참조
 - [단위 테스트] 전체 테스트 범위 중 단위 테스트 극대화
 - `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록
+
+## 참고
+
+`kubectl delete -f wasmplugin.yaml` 을 하더라도 그 즉시 wasm이 Envoy에서 삭제되는 것이 아닌 약간(30초?) 시간이 지난 후에 삭제되는 듯. 아래와 같은 로그로 확인 가능. 새로운 wasm 동작 확인 필요 시 기존 wasm 제거 후 아래 메시지 확인 후 새 wasm 로드 필요.
+
+`2025-02-23T05:51:26.936732Z     debug   envoy init external/envoy/source/common/init/target_impl.cc:68  shared target FilterConfigSubscription init extenstions.istio.io/wasmplugin/cluster.openapi-path-filter destroyedthread=20`
 
 ## Getting started
 

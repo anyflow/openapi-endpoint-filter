@@ -21,15 +21,15 @@ impl Context for OpenapiPathRootContext {}
 
 impl RootContext for OpenapiPathRootContext {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("[openapi-path-filter] OpenAPI path filter initialized");
+        info!("OpenAPI path filter initialized");
         true
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
-        debug!("[openapi-path-filter] Configuring OpenAPI path filter");
+        debug!("Configuring OpenAPI path filter");
         match self.configure_router() {
             Ok(_) => {
-                info!("[openapi-path-filter] Router configured successfully");
+                info!("Router configured successfully");
                 true
             }
             Err(e) => {
@@ -40,27 +40,27 @@ impl RootContext for OpenapiPathRootContext {
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
-        debug!("[openapi-path-filter] Creating HTTP context");
+        debug!("Creating HTTP context");
         Some(Box::new(OpenapiPathHttpContext {
             router: Arc::clone(&self.router),
         }))
     }
 
-    fn get_type(&self) -> Option<ContextType> {
+    fn get_type(&self) -> Option<ContextType> { // 반드시 필요. 없으면 create_http_context() 호출 시 오류 발생
         Some(ContextType::HttpContext)
     }
 }
 
 impl OpenapiPathRootContext {
     fn configure_router(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("[openapi-path-filter] Retrieving plugin configuration");
+        debug!("Retrieving plugin configuration");
         let config_bytes = self.get_plugin_configuration()
             .ok_or("No plugin configuration found")?;
         self.configure_router_with_bytes(config_bytes)
     }
 
     fn configure_router_with_bytes(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("[openapi-path-filter] Configuring router with bytes: {} bytes", config_bytes.len());
+        debug!("Configuring router with bytes: {} bytes", config_bytes.len());
         let config_str = String::from_utf8(config_bytes)?;
         let config: Value = serde_json::from_str(&config_str)?;
 
@@ -70,13 +70,13 @@ impl OpenapiPathRootContext {
 
         let mut new_router = Router::new();
         for (path, _) in paths {
-            debug!("[openapi-path-filter] Inserting route: {}", path);
+            debug!("Inserting route: {}", path);
             new_router.insert(path, path.clone())
                 .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
         }
 
         self.router = Arc::new(new_router);
-        info!("[openapi-path-filter] Router configured successfully with {} paths", paths.len());
+        info!("Router configured successfully with {} paths", paths.len());
         Ok(())
     }
 }
@@ -90,34 +90,30 @@ impl Context for OpenapiPathHttpContext {}
 
 impl HttpContext for OpenapiPathHttpContext {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
-        debug!("[openapi-path-filter] Processing HTTP request headers");
+        debug!("Processing HTTP request headers");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-        debug!("[openapi-path-filter] Request path: {}", path);
+        debug!("Request path: {}", path);
         match self.process_request_path(&path) {
-            Ok(matched_value) => {
-                debug!("[openapi-path-filter] Matched OpenAPI path: {}", matched_value);
+            Some(matched_value) => {
                 self.set_http_request_header("x-openapi-path", Some(matched_value));
-                Action::Continue
             }
-            Err(e) => {
-                warn!("[openapi-path-filter] Error processing request path: {}", e);
-                Action::Continue
-            }
+            None => {}
         }
+        Action::Continue
     }
 }
 
 impl OpenapiPathHttpContext {
-    fn process_request_path(&self, path: &str) -> Result<&str, Box<dyn std::error::Error>> {
-        debug!("[openapi-path-filter] Checking if path exists in router: {}", path);
+    fn process_request_path(&self, path: &str) -> Option<&str> {
+        debug!("Checking if path exists in router: {}", path);
         match self.router.at(path) {
             Ok(matched) => {
-                debug!("[openapi-path-filter] Path '{}' matched with value: {}", path, matched.value);
-                Ok(matched.value)
+                debug!("Path '{}' matched with value: {}", path, matched.value);
+                Some(matched.value)
             }
             Err(e) => {
-                warn!("[openapi-path-filter] Path '{}' not found in configuration: {}", path, e);
-                Ok("")
+                warn!("Path '{}' not found in configuration: {}", path, e);
+                None
             }
         }
     }
