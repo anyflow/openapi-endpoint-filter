@@ -8,7 +8,7 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 
 - URL matching 최적화: `matchit` lib 사용(benchmark 결과 가장 빠르다고. [참조](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks))
 
-## DONE
+## Tasks
 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
@@ -17,17 +17,8 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ cargo/docker image version 자동 동기화(`${CARGO_MAKE_CRATE_VERSION}` in `Makefile.toml`)
 - ✅ image optimization (`wasm-opt` 도입)
 - ✅ Fast fail, optimization 포함 build step 정렬
-- 💧 LRU 캐시 도입: lru cache 사용이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 크고 복잡도가 증가. `cache` branch 참조.
-
-## TODO
-
-- `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: `hostcall`에서 오는 call path 검증용
-
-## 참고
-
-`kubectl delete -f wasmplugin.yaml` 을 하더라도 그 즉시 wasm이 Envoy에서 삭제되는 것이 아닌 약간(30초?) 시간이 지난 후에 삭제되는 듯. 아래와 같은 로그로 확인 가능. 새로운 wasm 동작 확인 필요 시 기존 wasm 제거 후 아래 메시지 확인 후 새 wasm 로드 필요.
-
-`2025-02-23T05:51:26.936732Z     debug   envoy init external/envoy/source/common/init/target_impl.cc:68  shared target FilterConfigSubscription init extenstions.istio.io/wasmplugin/cluster.openapi-path-filter destroyedthread=20`
+- 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: runtime 검증용. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야.
+- 💧 **LRU 캐시 도입**: `lru` lib이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 크고 복잡도가 증가. `cache` branch 참조.
 
 ## Getting started
 
@@ -57,19 +48,38 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 > istioctl pc log -n <namespace name> <pod name> --level wasm:debug
 
 # openapi-path-filter 만 logging
-> k logs -n <namespace name> <pod name> -f | grep openapi-path-filter
+> k logs -n <namespace name> <pod name> -f | grep -F '[opf]'
 
 # resource/telemetry.yaml 적용: x-openapi-path header, method를 각각 request_path, request_method란 metric label로 넣기 위함
 > kubectl apply -f telemetry.yaml
 
-# resources/wasmplugin.yaml 적용: 정상 loading 여부 확인을 위한 log 확인. e.g. "Configuring openapi-path-filter"
+# resources/wasmplugin.yaml 적용: 정상 loading 여부 확인을 위한 log 확인. e.g. "[opf] Router configured successfully"
 > kubectl apply -f wasmplugin.yaml
 
-# curl로 호출 후 log에 matching 여부 log가 나오는지 확인. e.g. "Path '/dockebi/v1/stuff' matched with value: /dockebi/v1/stuff"
+# curl로 호출 후 log에 matching 여부 log가 나오는지 확인. e.g. "[opf] Path '/dockebi/v1/stuff' matched with value: /dockebi/v1/stuff"
 > curl https://api.anyflow.net/dockebi/v1/stuff
 ```
 
-## docker-registry 참고 명령어
+## 참고
+
+### `[opf]` log prefix에 관하여
+
+log grep 용. `openapi-path-filter` 만 갖고는 전체 `grep` 불가하기 때문. 아래 첫 번째처럼 `openapi-path-filter` 가 자동으로 붙는 경우도 있지만 두 번째처럼 안붙는 경우도 있기 때문.
+
+- `2025-02-23T20:30:59.970615Z     debug   envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1192 wasm log cluster.openapi-path-filter: [opf] Creating HTTP context       thread=29`
+- `2025-02-23T20:28:39.632084Z     info    envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: [opf] Router configured successfully  thread=20`
+
+
+### wasm unloading 확인 방법에 관하여
+
+`kubectl delete -f wasmplugin.yaml` 을 하더라도 그 즉시 wasm이 Envoy에서 삭제되는 것이 아닌 30s ~ 60s이 지난 후에 삭제되는 듯. 아래와 같은 로그로 확인 가능. 새로운 wasm 동작 확인 필요 시 기존 wasm 제거 후 아래 메시지 확인 후 새 wasm 로드 필요.
+
+- `2025-02-23T19:35:58.014282Z     info    envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: openapi-path-filter terminated        thread=20`
+
+- `2025-02-23T05:51:26.936732Z     debug   envoy init external/envoy/source/common/init/target_impl.cc:68  shared target FilterConfigSubscription init extenstions.istio.io/wasmplugin/cluster.openapi-path-filter destroyedthread=20`
+
+
+### docker-registry 명령어
 
 ```shell
 # image catalog 얻기
