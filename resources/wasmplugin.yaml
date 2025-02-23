@@ -7,7 +7,8 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: docker-registry.anyflow.net/openapi-path-filter:latest
+  url: docker-registry.anyflow.net/openapi-path-filter:0.1.7
+  imagePullPolicy: Always
   pluginConfig:
     paths:
       /dockebi/v1/stuff: {}

@@ -21,8 +21,13 @@ impl Context for OpenapiPathRootContext {}
 
 impl RootContext for OpenapiPathRootContext {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("openapi-path-filter initialized");
+        info!("OpenAPI path filter initialized");
         true
+    }
+
+    // 필수로 붙여야. 없으면 `create_http_context()` 호출 시 hang 발생
+    fn get_type(&self) -> Option<ContextType> {
+        Some(ContextType::HttpContext)
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
@@ -35,7 +40,15 @@ impl RootContext for OpenapiPathRootContext {
             }
         };
 
-        match self.configure_router(config_bytes) {
+        let config = match String::from_utf8(config_bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to convert config bytes to UTF-8 string: {}", e);
+                return false;
+            }
+        };
+
+        match self.configure_router(&config) {
             Ok(_) => {
                 info!("Router configured successfully");
                 true
@@ -53,17 +66,12 @@ impl RootContext for OpenapiPathRootContext {
             router: Arc::clone(&self.router),
         }))
     }
-
-    fn get_type(&self) -> Option<ContextType> { // 반드시 필요. 없으면 create_http_context() 호출 시 오류 발생
-        Some(ContextType::HttpContext)
-    }
 }
 
 impl OpenapiPathRootContext {
-    fn configure_router(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("Configuring router with bytes: {} bytes", config_bytes.len());
-        let config_str = String::from_utf8(config_bytes)?;
-        let config: Value = serde_json::from_str(&config_str)?;
+    fn configure_router(&mut self, config: &str) -> Result<(), Box<dyn std::error::Error>> {
+        debug!("Configuring router with config string of length: {} chars", config.len());
+        let config: Value = serde_json::from_str(config)?;
 
         let paths = config.get("paths")
             .and_then(Value::as_object)
@@ -105,7 +113,6 @@ impl HttpContext for OpenapiPathHttpContext {
     }
 }
 
-
 impl OpenapiPathHttpContext {
     fn process_request_path(&self, path: &str) -> Option<&str> {
         let normalized_path = path.split('?').next().unwrap_or("");
@@ -123,7 +130,6 @@ impl OpenapiPathHttpContext {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -144,7 +150,7 @@ mod tests {
     #[test]
     fn test_path_parameter_matching() {
         let mut root_ctx = OpenapiPathRootContext::default();
-        root_ctx.configure_router(TEST_CONFIG.as_bytes().to_vec()).unwrap();
+        root_ctx.configure_router(TEST_CONFIG).unwrap();
 
         let http_ctx = OpenapiPathHttpContext {
             router: Arc::clone(&root_ctx.router)
@@ -188,14 +194,14 @@ mod tests {
     fn test_invalid_json() {
         let mut context = OpenapiPathRootContext::default();
         let invalid_configs = vec![
-            b"{invalid json}".to_vec(),
-            b"[\"array\", \"instead\"]".to_vec(),
-            b"null".to_vec(),
+            "{invalid json}",
+            "[\"array\", \"instead\"]",
+            "null",
         ];
 
         for config in invalid_configs {
             assert!(context.configure_router(config).is_err(),
-                "Should fail to configure router with invalid JSON");
+                "Should fail to configure router with invalid JSON: {}", config);
         }
     }
 
@@ -204,15 +210,14 @@ mod tests {
     fn test_missing_paths() {
         let mut context = OpenapiPathRootContext::default();
         let configs = vec![
-            json!({}),
-            json!({"paths": "string"}),
-            json!({"paths": ["array"]}),
+            json!({}).to_string(),
+            json!({"paths": "string"}).to_string(),
+            json!({"paths": ["array"]}).to_string(),
         ];
 
         for config in configs {
-            let config_bytes = serde_json::to_vec(&config).unwrap();
-            assert!(context.configure_router(config_bytes).is_err(),
-                "Should fail to configure router with missing or invalid 'paths'");
+            assert!(context.configure_router(&config).is_err(),
+                "Should fail to configure router with missing or invalid 'paths': {}", config);
         }
     }
 
@@ -222,9 +227,8 @@ mod tests {
         let mut root_ctx = OpenapiPathRootContext::default();
         let config = json!({
             "paths": {}
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
-        root_ctx.configure_router(config_bytes).unwrap();
+        }).to_string();
+        root_ctx.configure_router(&config).unwrap();
 
         let http_ctx = OpenapiPathHttpContext {
             router: Arc::clone(&root_ctx.router)

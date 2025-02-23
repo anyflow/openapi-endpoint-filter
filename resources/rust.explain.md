@@ -3,7 +3,7 @@
 ## 1. Ownership과 Borrowing
 
 Rust는 메모리 안전성을 보장하기 위해 소유권(ownership) 시스템을 사용합니다.
-여기서 Arc<T>(Atomic Reference Counting)는 여러 개의 소유자가 안전하게 공유할 수 있도록 참조 카운팅을 지원하는 스마트 포인터입니다.
+여기서 `Arc<T>`(Atomic Reference Counting)는 여러 개의 소유자가 안전하게 공유할 수 있도록 참조 카운팅을 지원하는 스마트 포인터입니다.
 
 ```rust
 router: Arc<Router<String>> // Arc로 공유 (readonly. writable은 Arc<Mutex<T>>, Arc<RwLock<T>>, 비동기에서는 Arc<AsyncMutex<T>>)
@@ -14,7 +14,7 @@ router: Arc<Router<String>> // Arc로 공유 (readonly. writable은 Arc<Mutex<T>
 
 ## 2. Pattern Matching
 
-Rust는 match 문을 사용하여 다양한 경우를 간결하게 처리합니다.
+Rust는 `match` 문을 사용하여 다양한 경우를 간결하게 처리합니다.
 
 ```rust
 match self.router.at(&path) {
@@ -70,11 +70,11 @@ impl HttpContext for OpenapiPathHttpContext {
 
 ## 5. 동적 디스패치 (Trait Object)
 
-Rust에서는 `Box<dyn Trait>`을 사용하여 **Trait Object(동적 디스패치)**를 지원합니다.
+Rust에서는 `Box<dyn Trait>`을 사용하여 Trait Object(동적 디스패치)를 지원합니다.
 
 > **dispatch**란? 호출 대상 method 결정 과정
-> - **dynamic dispatch**: runtime 타입 결정 (C++의 경우 `virtual`)
-> - **static dispatch**: compile time 타입 결정 (C++의 경우 template)
+> - **dynamic dispatch**: runtime 타입 결정. `dyn` 사용 (C++의 경우 `virtual`)
+> - **static dispatch**: compile time 타입 결정. `dyn` 없음 (C++의 경우 template)
 
 ```rust
 fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
@@ -92,23 +92,25 @@ fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
 Rust 자체는 멀티스레드와 비동기 실행을 지원하지만, 이 코드에서는 직접적인 async/await을 사용하지 않았습니다.
 그러나 `Arc<T>`와 같은 구조는 멀티스레드 환경에서 자원을 안전하게 공유하는 데 중요한 역할을 합니다.
 
-## 7. 정리
+## 7. Result와 Error Handling
+Rust의 오류 처리는 `Result<T, E>와 Option<T>`를 중심으로 이루어지며, 이 코드에서 configure_router 메서드에서 Result를 적극 활용합니다.
 
-이 코드에서 Rust의 중요한 특징들을 몇 가지 볼 수 있습니다:
+```rust
+fn configure_router(&mut self, config: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let config: Value = serde_json::from_str(config)?;
+    // ...
+}
+```
 
-- 소유권 시스템 (`Arc<T>`, 참조 카운트 관리)
-- 패턴 매칭 (`match` 문을 사용한 Result 처리)
-- 안전한 문자열 처리 (`from_utf8()`, `unwrap_or_default()`)
-- Trait 기반 인터페이스 (`trait`, `impl`)
-- 동적 디스패치 (`Box<dyn Trait>`)
+`?` 연산자는 내부적 match의 간소화로, Result나 Option에서 오류가 발생하면 함수를 즉시 종료하고 오류를 반환합니다. C++의 예외 처리(throw)와 달리, Rust는 오류를 값으로 처리하여 명시적으로 다루도록 강제합니다.
 
-Rust의 메모리 안전성과 성능을 유지하면서도 C++, Java와는 다른 방식으로 동작하는 점이 흥미로운 부분입니다.
+Box<dyn std::error::Error>가 동적 오류 타입을 다루기 위한 방법입니다.
 
-## 8. `Some()`에 관하여
+## 8. `Option<T>`: `Some()`, `None`
 
 `Some()`은 Rust에서 `Option<T>` 타입의 일부로, 값이 존재할 때 사용되는 열거형(Enumeration, Enum) 변형(Variant)입니다.
 
-### 1. Option<T> 타입이란?
+### 1. `Option<T>` 타입이란?
 
 Rust에서는 `null`이 없기 때문에 값이 없을 수도 있는 경우 `Option<T>` 열거형을 사용합니다.
 
@@ -121,12 +123,12 @@ enum Option<T> {
 
 - `Some(T)`: 값이 존재할 때 사용
 - `None`: 값이 없을 때 사용
--
+
 이렇게 하면 null 참조 에러 없이 안전하게 값을 다룰 수 있습니다.
 
 ### 2. 예제 코드
 
-#### ✅ Some()을 사용하는 기본 예제
+#### ✅ `Some()`을 사용하는 기본 예제
 
 ```rust
 fn maybe_number(input: bool) -> Option<i32> {
@@ -156,7 +158,7 @@ Got a number: 42
 - `maybe_number(true)`는 `Some(42)`를 반환
 - `maybe_number(false)`는 `None`을 반환
 
-#### ✅ Some()을 활용한 안전한 값 접근 (unwrap_or)
+#### ✅ `Some()`을 활용한 안전한 값 접근 (`unwrap_or`)
 
 `Option<T>` 값을 직접 사용하려면 match 문이나 메서드를 사용해야 합니다.
 
@@ -192,7 +194,7 @@ fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
 
 Rust는 `null` 참조가 없기 때문에, `Option<T>`을 적극적으로 활용해야 합니다.
 
-## 9. `Box::new()`에 관하여
+## 9. `Box::new()`
 
 `Box::new()`는 Rust의 스마트 포인터(Smart Pointer) 중 하나인 `Box<T>`를 생성하는 함수입니다.
 **Heap 메모리에 데이터를 저장하고, 그 포인터를 반환하는 역할**을 합니다.
@@ -219,7 +221,7 @@ println!("Boxed number: {}", boxed_number);
 2. `Box<T>`는 Heap에 있는 42를 가리키는 포인터 역할
 3. boxed_number를 통해 42를 읽거나 조작 가능
 
-### 3. Box::new()를 사용하는 이유
+### 3. `Box::new()`를 사용하는 이유
 
 Rust는 기본적으로 Trait(트레이트)을 직접 변수로 저장할 수 없습니다.
 Trait을 저장하려면 Heap 할당을 통한 동적 디스패치가 필요하며, 이를 위해 `Box<dyn Trait>`을 사용합니다.
@@ -242,7 +244,7 @@ fn main() {
 }
 ```
 
-#### 여기서 Box::new(Dog)가 하는 일:
+#### 여기서 `Box::new(Dog)`가 하는 일:
 
 1. Dog 객체를 Heap 메모리에 저장
 2. 그 포인터를 `Box<dyn Animal>`에 저장
@@ -276,3 +278,43 @@ fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
 - ✔ `Box<T>`는 Rust의 엄격한 메모리 모델을 준수하면서도 동적 할당을 지원하는 방법
 
 Rust의 메모리 안전성과 Trait Object(다형성)를 활용할 때 자주 사용됩니다.
+
+## 10. `#[derive(Default)]`
+
+`#[derive(Default)]`는 Rust에서 구조체(`struct`)나 열거형(`enum`)에 `Default` 트레이트를 자동으로 구현해주는 속성(attribute)입니다
+
+> attribute는 AOP 관점에서 aspect에 해당하나, 다른 점은 aspect가 runtime에 동작하는 것 과는 달리 attribute는 compile time에 동작하는 일종의 매크로.
+
+`Default` 트레이트: 타입의 기본값을 정의하는 트레이트로, `default()` 메서드를 통해 호출됩니다.
+
+`#[derive(Default)]`: 이 속성을 붙이면, Rust 컴파일러가 해당 타입에 대해 `Default` 구현을 자동 생성합니다.
+
+조건: 구조체의 모든 필드가 `Default`를 구현해야 사용 가능합니다 (예: `i32`, `String`, `Vec<T>` 등은 기본적으로 `Default` 제공).
+
+```rust
+#[derive(Default)]
+struct Example {
+    x: i32,       // 기본값: 0
+    y: String,    // 기본값: ""
+    z: Vec<u8>,   // 기본값: 빈 벡터 []
+}
+
+fn main() {
+    let ex = Example::default();
+    println!("x: {}, y: '{}', z: {:?}", ex.x, ex.y, ex.z);
+    // 출력: x: 0, y: '', z: []
+}
+```
+
+코드에서의 사용:
+
+```rust
+#[derive(Default)]
+struct OpenapiPathRootContext {
+    router: Arc<Router<String>>,
+}
+```
+
+`Arc<Router<String>>`의 기본값은 `Default`를 통해 생성되며, `Router<String>`이 `Default`를 지원해야 합니다.
+
+`OpenapiPathRootContext::default()`를 호출하면 `router`가 초기화된 기본 인스턴스를 얻을 수 있습니다.

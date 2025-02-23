@@ -12,7 +12,7 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
-- ✅ 단위테스트 보강
+- ✅ 단위 테스트 보강
 - ✅ build 자동화: cargo-make 사용
 - ✅ cargo/docker image version 자동 동기화(`${CARGO_MAKE_CRATE_VERSION}` in `Makefile.toml`)
 - ✅ image optimization (`wasm-opt` 도입)
@@ -47,40 +47,26 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 # 정상 등록 여부 확인
 > curl -X GET https://docker-registry.anyflow.net/v2/openapi-path-filter/manifests/latest \
   -H "Accept: application/vnd.oci.image.manifest.v1+json"
+```
 
-  # output
-  {
-    "schemaVersion": 1,
-    "name": "openapi-path-filter",
-    "tag": "latest",
-    "architecture": "arm64",
-    "fsLayers": [
-        {
-          "blobSum": "sha256:320faed3ae036840fc0b77a5ca2090383970865d3da8963e196a47b777de940a"
-        }
-    ],
-    "history": [
-        {
-          "v1Compatibility": "{\"architecture\":\"arm64\",\"config\":{\"Env\":[\"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"],\"WorkingDir\":\"/\"},\"created\":\"2025-02-17T14:59:27.382128345Z\",\"id\":\"dc62aa1b573b31b49429debbedaab6291dcdee8a1629919ca506f3e9f6445202\",\"os\":\"linux\"}"
-        }
-    ],
-    "signatures": [
-        {
-          "header": {
-              "jwk": {
-                "crv": "P-256",
-                "kid": "3NDH:3O7V:WTTD:BNBT:HLPN:TRW2:JUHL:AARV:K6XM:OVTZ:S2ZO:7NNI",
-                "kty": "EC",
-                "x": "tGUu0g9-c7mmx0-0I1C32uR6agE_TXr9Ar7DiesUTz0",
-                "y": "l7HXWD-VRz6As495iB0t4GOyY-XgqcKBXguVqJvm_0w"
-              },
-              "alg": "ES256"
-          },
-          "signature": "H35A8aksiOzN9D_8FQGkSILPiUS5VjkgzvuDSqog4eu6WSFYUpTgwm58JES1KUiV1X279oZu-BBk6-1dGBqwuw",
-          "protected": "eyJmb3JtYXRMZW5ndGgiOjU4OSwiZm9ybWF0VGFpbCI6IkNuMCIsInRpbWUiOiIyMDI1LTAyLTE3VDE2OjA4OjQzWiJ9"
-        }
-    ]
-  }
+## runtime 테스트 방법 in istio
+
+```shell
+
+# 대상 pod wasm log level을 debug로 변경
+> istioctl pc log -n <namespace name> <pod name> --level wasm:debug
+
+# openapi-path-filter 만 logging
+> k logs -n <namespace name> <pod name> -f | grep openapi-path-filter
+
+# resource/telemetry.yaml 적용: x-openapi-path header, method를 각각 request_path, request_method란 metric label로 넣기 위함
+> kubectl apply -f telemetry.yaml
+
+# resources/wasmplugin.yaml 적용: 정상 loading 여부 확인을 위한 log 확인. e.g. "Configuring openapi-path-filter"
+> kubectl apply -f wasmplugin.yaml
+
+# curl로 호출 후 log에 matching 여부 log가 나오는지 확인. e.g. "Path '/dockebi/v1/stuff' matched with value: /dockebi/v1/stuff"
+> curl https://api.anyflow.net/dockebi/v1/stuff
 ```
 
 ## docker-registry 참고 명령어
