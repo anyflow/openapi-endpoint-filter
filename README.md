@@ -4,15 +4,24 @@
 
 A Rust-based Istio WASM filter that injects a Prometheus label representing the request path, based on a path defined in the OpenAPI spec.
 
-## TODO
+## Advantages
+
+- URL matching 최적화: `matchit` lib 사용(benchmark 결과 가장 빠르다고. [참조](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks))
+
+## DONE
 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
+- ✅ 단위테스트 보강
 - ✅ build 자동화: cargo-make 사용
 - ✅ cargo/docker image version 자동 동기화(`${CARGO_MAKE_CRATE_VERSION}` in `Makefile.toml`)
+- ✅ image optimization (`wasm-opt` 도입)
+- ✅ Fast fail, optimization 포함 build step 정렬
 - 💧 LRU 캐시 도입: lru cache 사용이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 크고 복잡도가 증가. `cache` branch 참조.
-- [단위 테스트] 전체 테스트 범위 중 단위 테스트 극대화
-- `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록
+
+## TODO
+
+- `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: `hostcall`에서 오는 call path 검증용
 
 ## 참고
 
@@ -29,7 +38,10 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 # cargo-make 설치 (빌드 도구. Makefile.toml 참고)
 > cargo install cargo-make
 
-# test -> rust build -> docker build -> docker push
+# wasm-opt (bynaryen) 설치 (macOS의 경우. 타 OS의 경우 별도 방법 필요. 설치 안될 경우 Makefile.toml의 optimize-wasm task 제거로 본 step skip 가능
+> brew install binaryen
+
+# test -> rust build -> image optimization -> docker build -> docker push
 > cargo make clean-all
 
 # 정상 등록 여부 확인

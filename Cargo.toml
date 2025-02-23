@@ -1,6 +1,6 @@
 [package]
 name = "openapi-path-filter"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 
 [lib]
@@ -16,4 +16,4 @@ matchit = "0.8.6"
 log = "0.4.26"
 
 [dev-dependencies]
-proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }
+# proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }

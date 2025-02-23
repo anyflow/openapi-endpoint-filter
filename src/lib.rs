@@ -21,7 +21,7 @@ impl Context for OpenapiPathRootContext {}
 
 impl RootContext for OpenapiPathRootContext {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("OpenAPI path filter initialized");
+        info!("openapi-path-filter initialized");
         true
     }
 

@@ -6,24 +6,28 @@ IMAGE = "docker-registry.anyflow.net/openapi-path-filter:${VERSION}"
 command = "cargo"
 args = ["clean"]
 
-[tasks.build-wasm]
-command = "cargo"
-args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
-
 [tasks.test]
 command = "cargo"
 args = ["test"]
 
-[tasks.docker-build]
+[tasks.build-wasm]
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
+
+[tasks.optimize-wasm]
+command = "wasm-opt"
+args = ["-Os", "target/wasm32-unknown-unknown/release/openapi_path_filter.wasm", "-o", "target/wasm32-unknown-unknown/release/openapi_path_filter.optimized.wasm"]
+
+[tasks.build-docker]
 command = "docker"
 args = ["build", "-t", "${IMAGE}", "."]
 
-[tasks.docker-push]
+[tasks.push-docker]
 command = "docker"
 args = ["push", "${IMAGE}"]
 
 [tasks.all]
-dependencies = ["test", "build-wasm", "docker-build", "docker-push"]
+dependencies = ["test", "build-wasm", "optimize-wasm", "build-docker", "push-docker"]
 
 [tasks.clean-all]
 dependencies = ["clean", "all"]
