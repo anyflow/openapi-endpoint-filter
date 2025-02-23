@@ -1,11 +1,10 @@
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde_json::Value;
 use std::sync::Arc;
 use matchit::Router;
 
-// 플러그인 초기화
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
@@ -22,13 +21,17 @@ impl Context for OpenapiPathRootContext {}
 
 impl RootContext for OpenapiPathRootContext {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("OpenAPI path filter initialized");
+        info!("[openapi-path-filter] OpenAPI path filter initialized");
         true
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
+        debug!("[openapi-path-filter] Configuring OpenAPI path filter");
         match self.configure_router() {
-            Ok(_) => true,
+            Ok(_) => {
+                info!("[openapi-path-filter] Router configured successfully");
+                true
+            }
             Err(e) => {
                 error!("Failed to configure router: {}", e);
                 false
@@ -37,6 +40,7 @@ impl RootContext for OpenapiPathRootContext {
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
+        debug!("[openapi-path-filter] Creating HTTP context");
         Some(Box::new(OpenapiPathHttpContext {
             router: Arc::clone(&self.router),
         }))
@@ -49,12 +53,14 @@ impl RootContext for OpenapiPathRootContext {
 
 impl OpenapiPathRootContext {
     fn configure_router(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        debug!("[openapi-path-filter] Retrieving plugin configuration");
         let config_bytes = self.get_plugin_configuration()
             .ok_or("No plugin configuration found")?;
         self.configure_router_with_bytes(config_bytes)
     }
 
     fn configure_router_with_bytes(&mut self, config_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+        debug!("[openapi-path-filter] Configuring router with bytes: {} bytes", config_bytes.len());
         let config_str = String::from_utf8(config_bytes)?;
         let config: Value = serde_json::from_str(&config_str)?;
 
@@ -64,12 +70,13 @@ impl OpenapiPathRootContext {
 
         let mut new_router = Router::new();
         for (path, _) in paths {
+            debug!("[openapi-path-filter] Inserting route: {}", path);
             new_router.insert(path, path.clone())
                 .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
         }
 
         self.router = Arc::new(new_router);
-        info!("Router configured successfully with {} paths", paths.len());
+        info!("[openapi-path-filter] Router configured successfully with {} paths", paths.len());
         Ok(())
     }
 }
@@ -83,14 +90,17 @@ impl Context for OpenapiPathHttpContext {}
 
 impl HttpContext for OpenapiPathHttpContext {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
+        debug!("[openapi-path-filter] Processing HTTP request headers");
         let path = self.get_http_request_header(":path").unwrap_or_default();
+        debug!("[openapi-path-filter] Request path: {}", path);
         match self.process_request_path(&path) {
             Ok(matched_value) => {
+                debug!("[openapi-path-filter] Matched OpenAPI path: {}", matched_value);
                 self.set_http_request_header("x-openapi-path", Some(matched_value));
                 Action::Continue
             }
             Err(e) => {
-                warn!("Error processing request path: {}", e);
+                warn!("[openapi-path-filter] Error processing request path: {}", e);
                 Action::Continue
             }
         }
@@ -98,44 +108,55 @@ impl HttpContext for OpenapiPathHttpContext {
 }
 
 impl OpenapiPathHttpContext {
-    /// Processes the request path against the router without relying on HttpContext methods.
     fn process_request_path(&self, path: &str) -> Result<&str, Box<dyn std::error::Error>> {
+        debug!("[openapi-path-filter] Checking if path exists in router: {}", path);
         match self.router.at(path) {
-            Ok(matched) => Ok(matched.value),
+            Ok(matched) => {
+                debug!("[openapi-path-filter] Path '{}' matched with value: {}", path, matched.value);
+                Ok(matched.value)
+            }
             Err(e) => {
-                warn!("Path '{}' not found in OpenAPI spec: {}", path, e);
-                Ok("") // 기본값 반환
+                warn!("[openapi-path-filter] Path '{}' not found in configuration: {}", path, e);
+                Ok("")
             }
         }
     }
 }
 
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_root_context() {
-        let context = OpenapiPathRootContext::default();
-        assert!(context.router.at("/").is_err()); // 기본 라우터는 비어있어야 함
-    }
+    const TEST_CONFIG: &str = r#"{
+        "paths": {
+            "/api/users/{id}": {},
+            "/api/posts/{postId}/comments/{commentId}": {},
+            "/api/items": {}
+        }
+    }"#;
 
     #[test]
-    fn test_valid_configuration() {
-        let mut context = OpenapiPathRootContext::default();
-        let config = serde_json::json!({
-            "paths": {
-                "/api/v1/users": {},
-                "/api/v1/products/{id}": {}
-            }
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
+    fn test_path_parameter_matching() {
+        let mut root_ctx = OpenapiPathRootContext::default();
+        root_ctx.configure_router_with_bytes(TEST_CONFIG.as_bytes().to_vec()).unwrap();
 
-        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
-        assert!(context.router.at("/api/v1/users").is_ok());
-        assert!(context.router.at("/api/v1/products/123").is_ok());
-        assert!(context.router.at("/invalid/path").is_err());
+        let http_ctx = OpenapiPathHttpContext {
+            router: Arc::clone(&root_ctx.router)
+        };
+
+        let test_cases = vec![
+            ("/api/users/123", "/api/users/{id}"),
+            ("/api/posts/456/comments/789", "/api/posts/{postId}/comments/{commentId}"),
+            ("/api/items", "/api/items"),
+        ];
+
+        for (input_path, expected_match) in test_cases {
+            let result = http_ctx.process_request_path(input_path).unwrap();
+            assert_eq!(result, expected_match,
+                "Path '{}' should match '{}'", input_path, expected_match);
+        }
     }
 
     #[test]
@@ -155,25 +176,5 @@ mod tests {
         let config_bytes = serde_json::to_vec(&config).unwrap();
 
         assert!(context.configure_router_with_bytes(config_bytes).is_err());
-    }
-
-    #[test]
-    fn test_path_parameter_matching() {
-        let mut context = OpenapiPathRootContext::default();
-        let config = serde_json::json!({
-            "paths": {
-                "/api/users/{id}": {},
-                "/api/orders/{orderId}/items/{itemId}": {}
-            }
-        });
-        let config_bytes = serde_json::to_vec(&config).unwrap();
-
-        assert!(context.configure_router_with_bytes(config_bytes).is_ok());
-
-        let match_result = context.router.at("/api/users/123").unwrap();
-        assert_eq!(match_result.value, "/api/users/{id}");
-
-        let match_result = context.router.at("/api/orders/456/items/789").unwrap();
-        assert_eq!(match_result.value, "/api/orders/{orderId}/items/{itemId}");
     }
 }

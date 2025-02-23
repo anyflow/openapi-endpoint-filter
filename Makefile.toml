@@ -1,0 +1,29 @@
+[env]
+VERSION = "${CARGO_MAKE_CRATE_VERSION}"
+IMAGE = "docker-registry.anyflow.net/openapi-path-filter:${VERSION}"
+
+[tasks.clean]
+command = "cargo"
+args = ["clean"]
+
+[tasks.build-wasm]
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
+
+[tasks.test]
+command = "cargo"
+args = ["test"]
+
+[tasks.docker-build]
+command = "docker"
+args = ["build", "-t", "${IMAGE}", "."]
+
+[tasks.docker-push]
+command = "docker"
+args = ["push", "${IMAGE}"]
+
+[tasks.all]
+dependencies = ["build-wasm", "test", "docker-build", "docker-push"]
+
+[tasks.clean-all]
+dependencies = ["clean", "all"]
