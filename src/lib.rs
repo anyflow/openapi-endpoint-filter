@@ -1,9 +1,9 @@
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde_json::Value;
-use std::sync::Arc;
+use std::rc::Rc;
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
@@ -14,7 +14,7 @@ proxy_wasm::main! {{
 
 #[derive(Default)]
 struct OpenapiPathRootContext {
-    router: Arc<Router<String>>,
+    router: Rc<Router<String>>,
 }
 
 impl Context for OpenapiPathRootContext {
@@ -68,7 +68,7 @@ impl RootContext for OpenapiPathRootContext {
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
         debug!("[opf] Creating HTTP context");
         Some(Box::new(OpenapiPathHttpContext {
-            router: Arc::clone(&self.router),
+            router: Rc::clone(&self.router),
         }))
     }
 }
@@ -94,7 +94,7 @@ impl OpenapiPathRootContext {
                 .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
         }
 
-        self.router = Arc::new(new_router);
+        self.router = Rc::new(new_router);
         info!(
             "[opf] Router configured successfully with {} paths",
             paths.len()
@@ -105,7 +105,7 @@ impl OpenapiPathRootContext {
 
 #[derive(Default)]
 struct OpenapiPathHttpContext {
-    router: Arc<Router<String>>,
+    router: Rc<Router<String>>,
 }
 
 impl Context for OpenapiPathHttpContext {}
@@ -143,7 +143,7 @@ impl OpenapiPathHttpContext {
                 Some(matched.value)
             }
             Err(e) => {
-                warn!(
+                debug!(
                     "[opf] Path '{}' not found in configuration: {}",
                     normalized_path, e
                 );
@@ -172,7 +172,7 @@ mod tests {
         root_ctx.configure_router(TEST_CONFIG).unwrap();
 
         let http_ctx = OpenapiPathHttpContext {
-            router: Arc::clone(&root_ctx.router),
+            router: Rc::clone(&root_ctx.router),
         };
 
         let test_cases = vec![
@@ -265,7 +265,7 @@ mod tests {
         root_ctx.configure_router(&config).unwrap();
 
         let http_ctx = OpenapiPathHttpContext {
-            router: Arc::clone(&root_ctx.router),
+            router: Rc::clone(&root_ctx.router),
         };
 
         assert_eq!(

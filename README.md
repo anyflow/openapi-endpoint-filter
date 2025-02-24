@@ -13,12 +13,13 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ 정상 등록 및 실제 동작 검증
 - ✅ 동적 wasm 모듈 로딩 테스트
 - ✅ 단위 테스트 보강
-- ✅ build 자동화: cargo-make 사용
+- ✅ build 자동화: `cargo-make` 사용
 - ✅ cargo/docker image version 자동 동기화(`${CARGO_MAKE_CRATE_VERSION}` in `Makefile.toml`)
 - ✅ image optimization (`wasm-opt` 도입)
 - ✅ Fast fail, optimization 포함 build step 정렬
+- ✅ Single thread 용으로 전환(`Rc<T>` 사용). proxy WASM은 single thread로 동작하므로.
+- 🚧 **LRU 캐시 도입**: `lru` lib 사용하여. single thread 환경이므로 lock 고민 불필요.
 - 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: runtime 검증용. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야.
-- 💧 **LRU 캐시 도입**: `lru` lib이 적절하지만 read에 조차 lock을 써야하기에 오히려 성능 저하 크고 복잡도가 증가. `cache` branch 참조.
 
 ## Getting started
 
@@ -29,7 +30,7 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 # cargo-make 설치 (빌드 도구. Makefile.toml 참고)
 > cargo install cargo-make
 
-# wasm-opt (bynaryen) 설치 (macOS의 경우. 타 OS의 경우 별도 방법 필요. 설치 안될 경우 Makefile.toml의 optimize-wasm task 제거로 본 step skip 가능
+# wasm-opt (bynaryen) 설치 (macOS의 경우. 타 OS의 경우 별도 방법 필요. 설치 안될 경우 Makefile.toml의 optimize-wasm task 제거로 본 step skip 가능)
 > brew install binaryen
 
 # test -> rust build -> image optimization -> docker build -> docker push

@@ -3,13 +3,14 @@
 ## 1. Ownership과 Borrowing
 
 Rust는 메모리 안전성을 보장하기 위해 소유권(ownership) 시스템을 사용합니다.
-여기서 `Arc<T>`(Atomic Reference Counting)는 여러 개의 소유자가 안전하게 공유할 수 있도록 참조 카운팅을 지원하는 스마트 포인터입니다.
+여기서 `Rc<T>`, `Arc<T>`(Atomic Reference Counting)는 여러 개의 소유자가 안전하게 공유할 수 있도록 참조 카운팅을 지원하는 스마트 포인터입니다.
 
 ```rust
+router: Rc<Router<String>> // Rc로 single thread용.
 router: Arc<Router<String>> // Arc로 공유 (readonly. writable은 Arc<Mutex<T>>, Arc<RwLock<T>>, 비동기에서는 Arc<AsyncMutex<T>>)
 ```
 
-- `Arc<T>`는 다중 스레드 환경에서도 안전하게 데이터를 공유할 수 있도록 도와줍니다.
+- `Arc<T>`는 다중 스레드 용이고, `Rc<T>`는 단일 스레드용입니다.
 - `Arc::clone(&self.router)`을 사용하여 참조를 복사할 수 있지만, 이는 새로운 복사본이 아니라 같은 데이터를 참조하는 카운트 증가입니다.
 
 ## 2. Pattern Matching
