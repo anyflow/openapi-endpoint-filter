@@ -1,20 +1,31 @@
 use log::{debug, error, info};
+use lru::LruCache;
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde_json::Value;
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(OpenapiPathRootContext::default())
+        Box::new(OpenapiPathRootContext::new())
     });
 }}
 
-#[derive(Default)]
 struct OpenapiPathRootContext {
     router: Rc<Router<String>>,
+    cache: Option<LruCache<String, String>>,
+}
+
+impl OpenapiPathRootContext {
+    fn new() -> Self {
+        Self {
+            router: Rc::new(Router::new()),
+            cache: None,
+        }
+    }
 }
 
 impl Context for OpenapiPathRootContext {
@@ -45,7 +56,7 @@ impl RootContext for OpenapiPathRootContext {
             }
         };
 
-        let config = match String::from_utf8(config_bytes) {
+        let config_str = match String::from_utf8(config_bytes) {
             Ok(s) => s,
             Err(e) => {
                 error!("[opf] Failed to convert bytes to UTF-8 string: {}", e);
@@ -53,13 +64,21 @@ impl RootContext for OpenapiPathRootContext {
             }
         };
 
-        match self.configure_router(&config) {
+        let config: Value = match serde_json::from_str(&config_str) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("[opf] Failed to parse JSON configuration: {}", e);
+                return false;
+            }
+        };
+
+        match self.configure(&config) {
             Ok(_) => {
-                info!("[opf] Router configured successfully");
+                info!("[opf] Configuration successful");
                 true
             }
             Err(e) => {
-                error!("[opf] Failed to configure router: {}", e);
+                error!("[opf] Configuration failed: {}", e);
                 false
             }
         }
@@ -69,31 +88,30 @@ impl RootContext for OpenapiPathRootContext {
         debug!("[opf] Creating HTTP context");
         Some(Box::new(OpenapiPathHttpContext {
             router: Rc::clone(&self.router),
+            cache: self.cache.as_ref().unwrap().clone(), // Clone으로 복사
         }))
     }
 }
 
 impl OpenapiPathRootContext {
-    fn configure_router(&mut self, config: &str) -> Result<(), Box<dyn std::error::Error>> {
-        debug!(
-            "[opf] Configuring router with config string of length: {} chars",
-            config.len()
-        );
-        let config: Value = serde_json::from_str(config)?;
+    fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
+        let cache_size = config
+            .get("cache_size")
+            .and_then(Value::as_u64)
+            .unwrap_or(1024) as usize;
+        let cache_size =
+            NonZeroUsize::new(cache_size).ok_or("cache_size must be greater than 0")?;
+        self.cache = Some(LruCache::new(cache_size));
 
         let paths = config
             .get("paths")
             .and_then(Value::as_object)
-            .ok_or("[opf] Invalid or missing 'paths' in configuration")?;
-
+            .ok_or("Invalid or missing 'paths' in configuration")?;
         let mut new_router = Router::new();
         for (path, _) in paths {
             debug!("[opf] Inserting route: {}", path);
-            new_router
-                .insert(path, path.clone())
-                .map_err(|e| format!("Failed to insert route {}: {}", path, e))?;
+            new_router.insert(path, path.clone())?;
         }
-
         self.router = Rc::new(new_router);
         info!(
             "[opf] Router configured successfully with {} paths",
@@ -103,9 +121,9 @@ impl OpenapiPathRootContext {
     }
 }
 
-#[derive(Default)]
 struct OpenapiPathHttpContext {
     router: Rc<Router<String>>,
+    cache: LruCache<String, String>,
 }
 
 impl Context for OpenapiPathHttpContext {}
@@ -114,40 +132,34 @@ impl HttpContext for OpenapiPathHttpContext {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
         debug!("[opf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-
-        debug!("[opf] Request path (without query): {}", path);
-        match self.process_request_path(&path) {
-            Some(matched_value) => {
-                self.set_http_request_header("x-openapi-path", Some(matched_value));
-            }
-            None => {}
+        if let Some(matched_value) = self.get_openapi_path(&path) {
+            self.set_http_request_header("x-openapi-path", Some(&matched_value));
         }
         Action::Continue
     }
 }
 
 impl OpenapiPathHttpContext {
-    fn process_request_path(&self, path: &str) -> Option<&str> {
-        let normalized_path = path.split('?').next().unwrap_or("");
-
-        debug!(
-            "[opf] Checking if path exists in router: {}",
-            normalized_path
-        );
-        match self.router.at(normalized_path) {
-            Ok(matched) => {
-                debug!(
-                    "[opf] Path '{}' matched with value: {}",
-                    normalized_path, matched.value
-                );
-                Some(matched.value)
-            }
-            Err(e) => {
-                debug!(
-                    "[opf] Path '{}' not found in configuration: {}",
-                    normalized_path, e
-                );
-                None
+    fn get_openapi_path(&mut self, path: &str) -> Option<String> {
+        let normalized_path = path.split('?').next().unwrap_or("").to_string();
+        if let Some(matched_value) = self.cache.get(&normalized_path) {
+            debug!(
+                "[opf] Cache hit for path: {}, value: {}",
+                normalized_path, matched_value
+            );
+            Some(matched_value.clone())
+        } else {
+            debug!("[opf] Cache miss for path: {}", normalized_path);
+            match self.router.at(&normalized_path) {
+                Ok(matched) => {
+                    let matched_value = matched.value.clone();
+                    self.cache.put(normalized_path, matched_value.clone());
+                    Some(matched_value)
+                }
+                Err(_) => {
+                    debug!("[opf] No match found for path: {}", normalized_path);
+                    None
+                }
             }
         }
     }
@@ -159,6 +171,7 @@ mod tests {
     use serde_json::json;
 
     const TEST_CONFIG: &str = r#"{
+        "cache_size": 1024,
         "paths": {
             "/api/users/{id}": {},
             "/api/posts/{postId}/comments/{commentId}": {},
@@ -168,53 +181,56 @@ mod tests {
 
     #[test]
     fn test_path_parameter_matching() {
-        let mut root_ctx = OpenapiPathRootContext::default();
-        root_ctx.configure_router(TEST_CONFIG).unwrap();
+        let mut root_ctx = OpenapiPathRootContext::new();
+        root_ctx
+            .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
+            .unwrap();
 
-        let http_ctx = OpenapiPathHttpContext {
+        let mut http_ctx = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.unwrap().clone(),
         };
 
         let test_cases = vec![
-            // 기본 매칭 경로
-            ("/api/items", Some("/api/items")),
-            ("/api/users/123", Some("/api/users/{id}")),
+            ("/api/items", Some("/api/items".to_string())),
+            ("/api/users/123", Some("/api/users/{id}".to_string())),
             (
                 "/api/posts/456/comments/789",
-                Some("/api/posts/{postId}/comments/{commentId}"),
+                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
             ),
-            // 쿼리 문자열 포함 경로
-            ("/api/users/123?key=value", Some("/api/users/{id}")),
-            ("/api/items?sort=asc&page=2", Some("/api/items")),
+            (
+                "/api/users/123?key=value",
+                Some("/api/users/{id}".to_string()),
+            ),
+            ("/api/items?sort=asc&page=2", Some("/api/items".to_string())),
             (
                 "/api/posts/456/comments/789?active=true",
-                Some("/api/posts/{postId}/comments/{commentId}"),
+                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
             ),
-            ("/api/items?filter=active&limit=10", Some("/api/items")),
+            (
+                "/api/items?filter=active&limit=10",
+                Some("/api/items".to_string()),
+            ),
             (
                 "/api/posts/1/comments/2?a=b&c=d",
-                Some("/api/posts/{postId}/comments/{commentId}"),
+                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
             ),
-            // 복잡한 쿼리 문자열
             (
                 "/api/users/456?key=value&nested[key]=val",
-                Some("/api/users/{id}"),
+                Some("/api/users/{id}".to_string()),
             ),
-            // trailing slash 포함 경로
             ("/api/users/123/", None),
             ("/api/items/", None),
             ("/api/posts/456/comments/789/", None),
-            // trailing slash와 쿼리 문자열 조합
             ("/api/users/123/?key=value", None),
             ("/api/items/?sort=asc", None),
-            // 매칭되지 않는 경로
             ("/api/users", None),
             ("/api/posts/456", None),
             ("/api/nonexistent", None),
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.process_request_path(input_path);
+            let result = http_ctx.get_openapi_path(input_path);
             assert_eq!(
                 result, expected,
                 "Path '{}' should match '{:?}' but got '{:?}'",
@@ -224,32 +240,19 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_json() {
-        let mut context = OpenapiPathRootContext::default();
-        let invalid_configs = vec!["{invalid json}", "[\"array\", \"instead\"]", "null"];
+    fn test_invalid_config() {
+        let mut context = OpenapiPathRootContext::new();
+        let invalid_configs = vec![
+            json!({}),
+            json!({"paths": "string"}),
+            json!({"paths": ["array"]}),
+            json!({"cache_size": "not a number"}),
+        ];
 
         for config in invalid_configs {
             assert!(
-                context.configure_router(config).is_err(),
-                "Should fail to configure router with invalid JSON: {}",
-                config
-            );
-        }
-    }
-
-    #[test]
-    fn test_missing_paths() {
-        let mut context = OpenapiPathRootContext::default();
-        let configs = vec![
-            json!({}).to_string(),
-            json!({"paths": "string"}).to_string(),
-            json!({"paths": ["array"]}).to_string(),
-        ];
-
-        for config in configs {
-            assert!(
-                context.configure_router(&config).is_err(),
-                "Should fail to configure router with missing or invalid 'paths': {}",
+                context.configure(&config).is_err(),
+                "Should fail to configure with invalid config: {}",
                 config
             );
         }
@@ -257,21 +260,74 @@ mod tests {
 
     #[test]
     fn test_empty_paths() {
-        let mut root_ctx = OpenapiPathRootContext::default();
+        let mut root_ctx = OpenapiPathRootContext::new();
         let config = json!({
+            "cache_size": 1024,
             "paths": {}
         })
         .to_string();
-        root_ctx.configure_router(&config).unwrap();
+        root_ctx
+            .configure(&serde_json::from_str(&config).unwrap())
+            .unwrap();
 
-        let http_ctx = OpenapiPathHttpContext {
+        let mut http_ctx = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.unwrap().clone(),
         };
 
         assert_eq!(
-            http_ctx.process_request_path("/api/users/123"),
+            http_ctx.get_openapi_path("/api/users/123"),
             None,
             "No paths should match with empty configuration"
         );
     }
+
+    // #[test]
+    // fn test_cache_behavior() {
+    //     let mut root_ctx = OpenapiPathRootContext::new();
+    //     let config = json!({
+    //         "cache_size": 2,
+    //         "paths": {
+    //             "/api/users/{id}": {},
+    //             "/api/items": {}
+    //         }
+    //     })
+    //     .to_string();
+    //     root_ctx
+    //         .configure(&serde_json::from_str(&config).unwrap())
+    //         .unwrap();
+
+    //     let mut http_ctx1 = OpenapiPathHttpContext {
+    //         router: Rc::clone(&root_ctx.router),
+    //         cache: root_ctx.cache.as_ref().unwrap().clone(),
+    //     };
+
+    //     let mut http_ctx2 = OpenapiPathHttpContext {
+    //         router: Rc::clone(&root_ctx.router),
+    //         cache: root_ctx.cache.as_ref().unwrap().clone(),
+    //     };
+
+    //     let path1 = "/api/users/123";
+    //     let result1 = http_ctx1.get_openapi_path(path1);
+    //     assert_eq!(result1, Some("/api/users/{id}".to_string()));
+
+    //     let result2 = http_ctx2.get_openapi_path(path1);
+    //     assert_eq!(result2, Some("/api/users/{id}".to_string()));
+
+    //     assert_eq!(http_ctx1.cache.len(), 1);
+
+    //     let path2 = "/api/items";
+    //     let result3 = http_ctx1.get_openapi_path(path2);
+    //     assert_eq!(result3, Some("/api/items".to_string()));
+
+    //     assert_eq!(http_ctx1.cache.len(), 2);
+
+    //     let path3 = "/api/users/456";
+    //     let result4 = http_ctx2.get_openapi_path(path3);
+    //     assert_eq!(result4, Some("/api/users/{id}".to_string()));
+
+    //     assert!(http_ctx2.cache.contains(&path2.to_string()));
+    //     assert!(http_ctx2.cache.contains(&path3.to_string()));
+    //     assert!(!http_ctx2.cache.contains(&path1.to_string()));
+    // }
 }

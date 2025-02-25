@@ -19,6 +19,9 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ Fast fail, optimization 포함 build step 정렬
 - ✅ Single thread 용으로 전환(`Rc<T>` 사용). proxy WASM은 single thread로 동작하므로.
 - 🚧 **LRU 캐시 도입**: `lru` lib 사용하여. single thread 환경이므로 lock 고민 불필요.
+- 🚧 **cache_size < 0 or invalid(없음 포함)**: default 처리 (1024)
+- 🚧 **cache_size == 0**: cache disable
+- 🚧 각종 예외 처리(각종 오류 상황에 host에 outage 발생 안하도록)
 - 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: runtime 검증용. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야.
 
 ## Getting started
