@@ -19,16 +19,16 @@ proxy_wasm::main! {{
 
 struct OpenapiPathRootContext {
     router: Rc<Router<String>>,
-    cache: Rc<RefCell<LruCache<String, String>>>,
+    cache: Option<Rc<RefCell<LruCache<String, String>>>>,
 }
 
 impl OpenapiPathRootContext {
     fn new() -> Self {
         Self {
             router: Rc::new(Router::new()),
-            cache: Rc::new(RefCell::new(LruCache::new(
+            cache: Some(Rc::new(RefCell::new(LruCache::new(
                 NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
-            ))),
+            )))),
         }
     }
 }
@@ -92,20 +92,25 @@ impl RootContext for OpenapiPathRootContext {
         debug!("[opf] Creating HTTP context");
         Some(Box::new(OpenapiPathHttpContext {
             router: Rc::clone(&self.router),
-            cache: Rc::clone(&self.cache),
+            cache: self.cache.as_ref().map(Rc::clone),
         }))
     }
 }
 
 impl OpenapiPathRootContext {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
-        let cache_size = config
+        let size = config
             .get("cache_size")
             .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_CACHE_SIZE as u64) as usize;
-        let cache_size =
-            NonZeroUsize::new(cache_size).ok_or("cache_size must be greater than 0")?;
-        *self.cache.borrow_mut() = LruCache::new(cache_size);
+            .unwrap_or(DEFAULT_CACHE_SIZE as u64);
+
+        if size == 0 {
+            self.cache = None;
+        } else {
+            let cache_size = NonZeroUsize::new(size as usize)
+                .unwrap_or(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap());
+            self.cache = Some(Rc::new(RefCell::new(LruCache::new(cache_size))));
+        }
 
         let paths = config
             .get("paths")
@@ -118,9 +123,14 @@ impl OpenapiPathRootContext {
             new_router.insert(path, path.clone())?;
         }
         self.router = Rc::new(new_router);
+
         info!(
-            "[opf] Router configured successfully with {} paths",
-            paths.len()
+            "[opf] Router configured successfully with {} paths and cache size {}",
+            paths.len(),
+            match &self.cache {
+                Some(cache) => cache.borrow().cap().to_string(),
+                None => "None".to_string(),
+            }
         );
         Ok(())
     }
@@ -128,7 +138,7 @@ impl OpenapiPathRootContext {
 
 struct OpenapiPathHttpContext {
     router: Rc<Router<String>>,
-    cache: Rc<RefCell<LruCache<String, String>>>,
+    cache: Option<Rc<RefCell<LruCache<String, String>>>>,
 }
 
 impl Context for OpenapiPathHttpContext {}
@@ -147,25 +157,33 @@ impl HttpContext for OpenapiPathHttpContext {
 impl OpenapiPathHttpContext {
     fn get_openapi_path(&self, path: &str) -> Option<String> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
-        let mut cache = self.cache.borrow_mut();
-        if let Some(matched_value) = cache.get(&normalized_path) {
-            debug!(
-                "[opf] Cache hit for path: {}, value: {}",
-                normalized_path, matched_value
-            );
-            Some(matched_value.clone())
-        } else {
-            debug!("[opf] Cache miss for path: {}", normalized_path);
-            match self.router.at(&normalized_path) {
-                Ok(matched) => {
-                    let matched_value = matched.value.clone();
-                    cache.put(normalized_path, matched_value.clone());
-                    Some(matched_value)
+        if let Some(cache) = &self.cache {
+            let mut cache = cache.borrow_mut();
+            if let Some(matched_value) = cache.get(&normalized_path) {
+                debug!(
+                    "[opf] Cache hit for path: {}, value: {}",
+                    normalized_path, matched_value
+                );
+                return Some(matched_value.clone());
+            }
+        }
+        debug!(
+            "[opf] Cache miss or cache disabled for path: {}",
+            normalized_path
+        );
+        match self.router.at(&normalized_path) {
+            Ok(matched) => {
+                let matched_value = matched.value.clone();
+                if let Some(cache) = &self.cache {
+                    cache
+                        .borrow_mut()
+                        .put(normalized_path, matched_value.clone());
                 }
-                Err(_) => {
-                    debug!("[opf] No match found for path: {}", normalized_path);
-                    None
-                }
+                Some(matched_value)
+            }
+            Err(_) => {
+                debug!("[opf] No match found for path: {}", normalized_path);
+                None
             }
         }
     }
@@ -194,7 +212,7 @@ mod tests {
 
         let http_ctx = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
-            cache: Rc::clone(&root_ctx.cache),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         let test_cases = vec![
@@ -262,12 +280,12 @@ mod tests {
 
         let http_ctx1 = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
-            cache: Rc::clone(&root_ctx.cache),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         let http_ctx2 = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
-            cache: Rc::clone(&root_ctx.cache),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         let path1 = "/api/users/123";
@@ -277,22 +295,118 @@ mod tests {
         let result2 = http_ctx2.get_openapi_path(path1);
         assert_eq!(result2, Some("/api/users/{id}".to_string()));
 
-        assert_eq!(root_ctx.cache.borrow().len(), 1);
+        if let Some(cache) = &root_ctx.cache {
+            assert_eq!(cache.borrow().len(), 1);
+        } else {
+            panic!("Cache should be enabled");
+        }
 
         let path2 = "/api/items";
         let result3 = http_ctx1.get_openapi_path(path2);
         assert_eq!(result3, Some("/api/items".to_string()));
 
-        assert_eq!(root_ctx.cache.borrow().len(), 2);
+        if let Some(cache) = &root_ctx.cache {
+            assert_eq!(cache.borrow().len(), 2);
+        } else {
+            panic!("Cache should be enabled");
+        }
 
         let path3 = "/api/users/456";
         let result4 = http_ctx2.get_openapi_path(path3);
         assert_eq!(result4, Some("/api/users/{id}".to_string()));
 
-        let cache = root_ctx.cache.borrow();
-        assert!(cache.contains(&path2.to_string()));
-        assert!(cache.contains(&path3.to_string()));
-        assert!(!cache.contains(&path1.to_string()));
+        if let Some(cache) = &root_ctx.cache {
+            let cache = cache.borrow();
+            assert!(cache.contains(&path2.to_string()));
+            assert!(cache.contains(&path3.to_string()));
+            assert!(!cache.contains(&path1.to_string()));
+        } else {
+            panic!("Cache should be enabled");
+        }
+    }
+
+    #[test]
+    fn test_cache_size_parsing() {
+        let paths = json!({
+            "/api/users/{id}": {},
+        });
+        let test_cases = vec![
+            // Missing cache_size
+            (json!({ "paths": paths.clone() }), Some(DEFAULT_CACHE_SIZE)),
+            // Not a number
+            (
+                json!({ "cache_size": "not a number", "paths": paths.clone() }),
+                Some(DEFAULT_CACHE_SIZE),
+            ),
+            // Negative number (treated as not u64)
+            (
+                json!({ "cache_size": -1, "paths": paths.clone() }),
+                Some(DEFAULT_CACHE_SIZE),
+            ),
+            // Zero (cache disabled)
+            (json!({ "cache_size": 0, "paths": paths.clone() }), None),
+            // Positive number
+            (
+                json!({ "cache_size": 100, "paths": paths.clone() }),
+                Some(100),
+            ),
+        ];
+
+        for (config, expected_cache) in test_cases {
+            let mut root_ctx = OpenapiPathRootContext::new();
+            root_ctx.configure(&config).unwrap();
+            match expected_cache {
+                Some(size) => {
+                    assert!(
+                        root_ctx.cache.is_some(),
+                        "Cache should be enabled for config: {}",
+                        config
+                    );
+                    let cache = root_ctx.cache.as_ref().unwrap().borrow();
+                    assert_eq!(
+                        cache.cap(),
+                        NonZeroUsize::new(size).unwrap(),
+                        "Cache capacity mismatch for config: {}",
+                        config
+                    );
+                }
+                None => {
+                    assert!(
+                        root_ctx.cache.is_none(),
+                        "Cache should be disabled for config: {}",
+                        config
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cache_disabled_behavior() {
+        let mut root_ctx = OpenapiPathRootContext::new();
+        let config = json!({
+            "cache_size": 0,
+            "paths": {
+                "/api/users/{id}": {},
+            }
+        })
+        .to_string();
+        root_ctx
+            .configure(&serde_json::from_str(&config).unwrap())
+            .unwrap();
+
+        let http_ctx = OpenapiPathHttpContext {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+        };
+
+        let path = "/api/users/123";
+        let result1 = http_ctx.get_openapi_path(path);
+        assert_eq!(result1, Some("/api/users/{id}".to_string()));
+        let result2 = http_ctx.get_openapi_path(path);
+        assert_eq!(result2, Some("/api/users/{id}".to_string()));
+
+        assert!(root_ctx.cache.is_none(), "Cache should be disabled");
     }
 
     #[test]
@@ -302,7 +416,6 @@ mod tests {
             json!({}),
             json!({"paths": "string"}),
             json!({"paths": ["array"]}),
-            json!({"cache_size": "not a number"}),
         ];
 
         for config in invalid_configs {
@@ -328,7 +441,7 @@ mod tests {
 
         let http_ctx = OpenapiPathHttpContext {
             router: Rc::clone(&root_ctx.router),
-            cache: Rc::clone(&root_ctx.cache),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         assert_eq!(
