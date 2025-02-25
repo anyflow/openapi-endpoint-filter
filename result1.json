@@ -1,0 +1,269 @@
+{
+  "RunType": "HTTP",
+  "Labels": "api.anyflow.net/dockebi/v1/stuff , hyunjeongparkui-MacBookPro",
+  "StartTime": "2025-02-25T22:07:24.448092+09:00",
+  "RequestedQPS": "640",
+  "RequestedDuration": "10s",
+  "ActualQPS": 97.74119492746416,
+  "ActualDuration": 10036709708,
+  "NumThreads": 4,
+  "Version": "1.68.0",
+  "DurationHistogram": {
+    "Count": 981,
+    "Min": 0.018540334,
+    "Max": 0.274644042,
+    "Sum": 40.123244631,
+    "Avg": 0.0409003513058104,
+    "StdDev": 0.020472243528543085,
+    "Data": [
+      {
+        "Start": 0.018540334,
+        "End": 0.02,
+        "Percent": 0.2038735983690112,
+        "Count": 2
+      },
+      {
+        "Start": 0.02,
+        "End": 0.025,
+        "Percent": 4.791029561671763,
+        "Count": 45
+      },
+      {
+        "Start": 0.025,
+        "End": 0.03,
+        "Percent": 17.737003058103976,
+        "Count": 127
+      },
+      {
+        "Start": 0.03,
+        "End": 0.035,
+        "Percent": 40.46890927624872,
+        "Count": 223
+      },
+      {
+        "Start": 0.035,
+        "End": 0.04,
+        "Percent": 63.506625891946996,
+        "Count": 226
+      },
+      {
+        "Start": 0.04,
+        "End": 0.045,
+        "Percent": 75.63710499490315,
+        "Count": 119
+      },
+      {
+        "Start": 0.045,
+        "End": 0.05,
+        "Percent": 84.60754332313965,
+        "Count": 88
+      },
+      {
+        "Start": 0.05,
+        "End": 0.06,
+        "Percent": 93.88379204892966,
+        "Count": 91
+      },
+      {
+        "Start": 0.06,
+        "End": 0.07,
+        "Percent": 96.73802242609582,
+        "Count": 28
+      },
+      {
+        "Start": 0.07,
+        "End": 0.08,
+        "Percent": 97.96126401630988,
+        "Count": 12
+      },
+      {
+        "Start": 0.08,
+        "End": 0.09,
+        "Percent": 98.36901121304791,
+        "Count": 4
+      },
+      {
+        "Start": 0.1,
+        "End": 0.12,
+        "Percent": 98.87869520897044,
+        "Count": 5
+      },
+      {
+        "Start": 0.12,
+        "End": 0.14,
+        "Percent": 99.49031600407747,
+        "Count": 6
+      },
+      {
+        "Start": 0.14,
+        "End": 0.16,
+        "Percent": 99.59225280326197,
+        "Count": 1
+      },
+      {
+        "Start": 0.25,
+        "End": 0.274644042,
+        "Percent": 100,
+        "Count": 4
+      }
+    ],
+    "Percentiles": [
+      {
+        "Percentile": 50,
+        "Value": 0.03706858407079646
+      },
+      {
+        "Percentile": 75,
+        "Value": 0.04473739495798319
+      },
+      {
+        "Percentile": 90,
+        "Value": 0.05581318681318681
+      },
+      {
+        "Percentile": 99,
+        "Value": 0.12396666666666659
+      },
+      {
+        "Percentile": 99.9,
+        "Value": 0.2686000906995004
+      }
+    ]
+  },
+  "ErrorsDurationHistogram": {
+    "Count": 0,
+    "Min": 0,
+    "Max": 0,
+    "Sum": 0,
+    "Avg": 0,
+    "StdDev": 0,
+    "Data": null
+  },
+  "Exactly": 0,
+  "Jitter": false,
+  "Uniform": false,
+  "NoCatchUp": false,
+  "RunID": 0,
+  "AccessLoggerInfo": "",
+  "ID": "2025-02-25-220724_api_anyflow_net_dockebi_v1_stuff_hyunjeongparkui_MacBookPro",
+  "RetCodes": {
+    "200": 981
+  },
+  "IPCountMap": {
+    "120.50.82.68:443": 4
+  },
+  "Insecure": false,
+  "MTLS": false,
+  "CACert": "",
+  "Cert": "",
+  "Key": "",
+  "UnixDomainSocket": "",
+  "URL": "https://api.anyflow.net/dockebi/v1/stuff",
+  "NumConnections": 1,
+  "Compression": false,
+  "DisableFastClient": false,
+  "HTTP10": false,
+  "H2": false,
+  "DisableKeepAlive": false,
+  "AllowHalfClose": false,
+  "FollowRedirects": false,
+  "Resolve": "",
+  "HTTPReqTimeOut": 3000000000,
+  "UserCredentials": "",
+  "ContentType": "",
+  "Payload": "",
+  "MethodOverride": "",
+  "LogErrors": true,
+  "SequentialWarmup": false,
+  "ConnReuseRange": [
+    0,
+    0
+  ],
+  "NoResolveEachConn": false,
+  "Offset": 0,
+  "Resolution": 0.001,
+  "Sizes": {
+    "Count": 981,
+    "Min": 1747,
+    "Max": 1747,
+    "Sum": 1713807,
+    "Avg": 1747,
+    "StdDev": 0,
+    "Data": [
+      {
+        "Start": 1747,
+        "End": 1747,
+        "Percent": 100,
+        "Count": 981
+      }
+    ]
+  },
+  "HeaderSizes": {
+    "Count": 981,
+    "Min": 166,
+    "Max": 166,
+    "Sum": 162846,
+    "Avg": 166,
+    "StdDev": 0,
+    "Data": [
+      {
+        "Start": 166,
+        "End": 166,
+        "Percent": 100,
+        "Count": 981
+      }
+    ]
+  },
+  "Sockets": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "SocketCount": 4,
+  "ConnectionStats": {
+    "Count": 4,
+    "Min": 0.019104958,
+    "Max": 0.024440541,
+    "Sum": 0.088051999,
+    "Avg": 0.02201299975,
+    "StdDev": 0.0019694481590946085,
+    "Data": [
+      {
+        "Start": 0.019104958,
+        "End": 0.02,
+        "Percent": 25,
+        "Count": 1
+      },
+      {
+        "Start": 0.02,
+        "End": 0.024440541,
+        "Percent": 100,
+        "Count": 3
+      }
+    ],
+    "Percentiles": [
+      {
+        "Percentile": 50,
+        "Value": 0.021480180333333335
+      },
+      {
+        "Percentile": 75,
+        "Value": 0.022960360666666665
+      },
+      {
+        "Percentile": 90,
+        "Value": 0.023848468866666667
+      },
+      {
+        "Percentile": 99,
+        "Value": 0.024381333786666667
+      },
+      {
+        "Percentile": 99.9,
+        "Value": 0.024434620278666667
+      }
+    ]
+  },
+  "AbortOn": 0
+}

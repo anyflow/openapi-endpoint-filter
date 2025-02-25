@@ -3,6 +3,8 @@ use lru::LruCache;
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
+use rand_xoshiro::rand_core::{RngCore, SeedableRng}; // 난수 생성기 초기화 및 사용을 위해
+use rand_xoshiro::Xoshiro256PlusPlus; // Xoshiro256++ 사용
 use serde_json::Value;
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
@@ -150,6 +152,16 @@ impl HttpContext for OpenapiPathHttpContext {
         if let Some(matched_value) = self.get_openapi_path(&path) {
             self.set_http_request_header("x-openapi-path", Some(&matched_value));
         }
+
+        // x-message-id 헤더가 있는지 확인하고 traceparent 생성
+        if let Some(message_id) = self.get_http_request_header("x-message-id") {
+            let traceparent = self.generate_traceparent(&message_id);
+            debug!("[opf] Generated traceparent: {}", traceparent);
+            self.set_http_request_header("traceparent", Some(&traceparent));
+        } else {
+            debug!("[opf] x-message-id header not found, skipping traceparent generation");
+        }
+
         Action::Continue
     }
 }
@@ -187,6 +199,40 @@ impl OpenapiPathHttpContext {
             }
         }
     }
+
+    fn generate_traceparent(&self, message_id: &str) -> String {
+        let trace_id = generate_trace_id(message_id);
+        let span_id = generate_span_id();
+        let flags = "01";
+        format!("00-{}-{}-{}", trace_id, span_id, flags)
+    }
+}
+
+// trace ID 생성 함수 (Xoshiro256PlusPlus 사용)
+fn generate_trace_id(prefix: &str) -> String {
+    let mut rng = Xoshiro256PlusPlus::from_entropy(); // 엔트로피로 초기화
+    let prefix_len = prefix.len();
+    let trace_id_len = 32;
+    let suffix_len = trace_id_len - prefix_len;
+
+    if suffix_len <= 0 {
+        // prefix가 32자 이상이면 앞 32자만 사용
+        prefix[..trace_id_len].to_string()
+    } else {
+        // prefix + 랜덤 suffix
+        let suffix: String = (0..suffix_len)
+            .map(|_| format!("{:x}", rng.next_u32() % 16)) // 0-15 사이의 16진수
+            .collect();
+        format!("{}{}", prefix, suffix)
+    }
+}
+
+// span ID 생성 함수 (Xoshiro256PlusPlus 사용)
+fn generate_span_id() -> String {
+    let mut rng = Xoshiro256PlusPlus::from_entropy(); // 엔트로피로 초기화
+    (0..16)
+        .map(|_| format!("{:x}", rng.next_u32() % 16)) // 0-15 사이의 16진수
+        .collect()
 }
 
 #[cfg(test)]
