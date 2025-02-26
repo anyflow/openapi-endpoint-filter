@@ -9,6 +9,8 @@ spec:
       app: gateway
   url: docker-registry.anyflow.net/openapi-path-filter:0.1.7
   imagePullPolicy: Always
+  phase: AUTHN # 실행 단계 설정 - Istio 트레이싱 필터보다 앞서 실행되도록
+  priority: 10 # 같은 phase 내에서의 우선순위 (높을수록 먼저 실행)
   pluginConfig:
     paths:
       /dockebi/v1/stuff: {}
