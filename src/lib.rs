@@ -3,12 +3,17 @@ use lru::LruCache;
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
-use rand_xoshiro::rand_core::{RngCore, SeedableRng}; // 난수 생성기 초기화 및 사용을 위해
-use rand_xoshiro::Xoshiro256PlusPlus; // Xoshiro256++ 사용
+use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+use rand_xoshiro::Xoshiro256PlusPlus;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
+
+// 전역 RNG를 thread_local로 정의 (고정 시드 사용)
+thread_local! {
+    static RNG: RefCell<Xoshiro256PlusPlus> = RefCell::new(Xoshiro256PlusPlus::seed_from_u64(42));
+}
 
 static DEFAULT_CACHE_SIZE: usize = 1024;
 
@@ -153,7 +158,7 @@ impl HttpContext for OpenapiPathHttpContext {
             self.set_http_request_header("x-openapi-path", Some(&matched_value));
         }
 
-        // x-message-id 헤더가 있는지 확인하고 traceparent 생성
+        // x-message-id 헤더가 있으면 traceparent 생성
         if let Some(message_id) = self.get_http_request_header("x-message-id") {
             let traceparent = self.generate_traceparent(&message_id);
             debug!("[opf] Generated traceparent: {}", traceparent);
@@ -208,31 +213,31 @@ impl OpenapiPathHttpContext {
     }
 }
 
-// trace ID 생성 함수 (Xoshiro256PlusPlus 사용)
-fn generate_trace_id(prefix: &str) -> String {
-    let mut rng = Xoshiro256PlusPlus::from_entropy(); // 엔트로피로 초기화
-    let prefix_len = prefix.len();
-    let trace_id_len = 32;
-    let suffix_len = trace_id_len - prefix_len;
+// 전역 RNG를 사용해 16진수 숫자 하나를 생성
+fn get_random_hex_digit() -> char {
+    RNG.with(|rng| {
+        let mut rng = rng.borrow_mut();
+        let r = rng.next_u32() % 16;
+        std::char::from_digit(r, 16).unwrap_or('0')
+    })
+}
 
-    if suffix_len <= 0 {
-        // prefix가 32자 이상이면 앞 32자만 사용
+// trace ID 생성: prefix 뒤에 랜덤 16진수 suffix를 붙임
+fn generate_trace_id(prefix: &str) -> String {
+    let prefix_len = prefix.len();
+    let trace_id_len: usize = 32; // 명시적 타입 지정
+    let suffix_len: usize = trace_id_len.saturating_sub(prefix_len);
+    if suffix_len == 0 {
         prefix[..trace_id_len].to_string()
     } else {
-        // prefix + 랜덤 suffix
-        let suffix: String = (0..suffix_len)
-            .map(|_| format!("{:x}", rng.next_u32() % 16)) // 0-15 사이의 16진수
-            .collect();
+        let suffix: String = (0..suffix_len).map(|_| get_random_hex_digit()).collect();
         format!("{}{}", prefix, suffix)
     }
 }
 
-// span ID 생성 함수 (Xoshiro256PlusPlus 사용)
+// span ID 생성: 16자리 16진수 문자열 생성
 fn generate_span_id() -> String {
-    let mut rng = Xoshiro256PlusPlus::from_entropy(); // 엔트로피로 초기화
-    (0..16)
-        .map(|_| format!("{:x}", rng.next_u32() % 16)) // 0-15 사이의 16진수
-        .collect()
+    (0..16).map(|_| get_random_hex_digit()).collect()
 }
 
 #[cfg(test)]
@@ -495,5 +500,55 @@ mod tests {
             None,
             "No paths should match with empty configuration"
         );
+    }
+
+    #[test]
+    fn test_generate_traceparent_format_with_short_message_id() {
+        // OpenapiPathHttpContext의 인스턴스 생성 (router, cache는 테스트에 필요 없으므로 최소한으로 설정)
+        let http_context = OpenapiPathHttpContext {
+            router: Rc::new(Router::new()),
+            cache: None,
+        };
+
+        let message_id = "abc"; // 길이가 32보다 짧은 메시지 ID
+        let traceparent = http_context.generate_traceparent(message_id);
+        // traceparent는 "00-<32 hex digits>-<16 hex digits>-01" 형태이어야 함
+        let parts: Vec<&str> = traceparent.split('-').collect();
+        assert_eq!(
+            parts.len(),
+            4,
+            "traceparent should have 4 parts separated by '-'"
+        );
+        assert_eq!(parts[0], "00", "Version part should be '00'");
+        assert_eq!(parts[3], "01", "Flags part should be '01'");
+        assert_eq!(parts[1].len(), 32, "Trace ID should be 32 characters");
+        assert_eq!(parts[2].len(), 16, "Span ID should be 16 characters");
+
+        // message_id가 32자보다 짧으면 trace id는 message_id로 시작해야 함.
+        assert!(
+            parts[1].starts_with(message_id),
+            "Trace ID should start with the message_id"
+        );
+    }
+
+    #[test]
+    fn test_generate_traceparent_with_long_message_id() {
+        let http_context = OpenapiPathHttpContext {
+            router: Rc::new(Router::new()),
+            cache: None,
+        };
+
+        // 길이가 32보다 긴 메시지 ID: trace id는 첫 32자만 사용
+        let message_id = "abcdefghijklmnopqrstuvwxyz0123456789"; // 길이 36
+        let traceparent = http_context.generate_traceparent(message_id);
+        let parts: Vec<&str> = traceparent.split('-').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "00");
+        assert_eq!(parts[3], "01");
+        assert_eq!(parts[1].len(), 32);
+        assert_eq!(parts[2].len(), 16);
+
+        // trace id는 message_id의 첫 32자로 구성됨
+        assert_eq!(parts[1], &message_id[..32]);
     }
 }
