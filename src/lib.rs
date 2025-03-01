@@ -13,16 +13,16 @@ static DEFAULT_CACHE_SIZE: usize = 1024;
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(OpenapiPathRootContext::new())
+        Box::new(OpenapiPathRoot::new())
     });
 }}
 
-struct OpenapiPathRootContext {
+struct OpenapiPathRoot {
     router: Rc<Router<String>>,
     cache: Option<Rc<RefCell<LruCache<String, String>>>>,
 }
 
-impl OpenapiPathRootContext {
+impl OpenapiPathRoot {
     fn new() -> Self {
         Self {
             router: Rc::new(Router::new()),
@@ -33,14 +33,14 @@ impl OpenapiPathRootContext {
     }
 }
 
-impl Context for OpenapiPathRootContext {
+impl Context for OpenapiPathRoot {
     fn on_done(&mut self) -> bool {
         info!("[opf] openapi-path-filter terminated");
         true
     }
 }
 
-impl RootContext for OpenapiPathRootContext {
+impl RootContext for OpenapiPathRoot {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
         info!("[opf] openapi-path-filter initialized");
         true
@@ -90,14 +90,14 @@ impl RootContext for OpenapiPathRootContext {
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
         debug!("[opf] Creating HTTP context");
-        Some(Box::new(OpenapiPathHttpContext {
+        Some(Box::new(OpenapiPathFilter {
             router: Rc::clone(&self.router),
             cache: self.cache.as_ref().map(Rc::clone),
         }))
     }
 }
 
-impl OpenapiPathRootContext {
+impl OpenapiPathRoot {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
         let size = config
             .get("cache_size")
@@ -136,14 +136,14 @@ impl OpenapiPathRootContext {
     }
 }
 
-struct OpenapiPathHttpContext {
+struct OpenapiPathFilter {
     router: Rc<Router<String>>,
     cache: Option<Rc<RefCell<LruCache<String, String>>>>,
 }
 
-impl Context for OpenapiPathHttpContext {}
+impl Context for OpenapiPathFilter {}
 
-impl HttpContext for OpenapiPathHttpContext {
+impl HttpContext for OpenapiPathFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
         debug!("[opf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
@@ -154,7 +154,7 @@ impl HttpContext for OpenapiPathHttpContext {
     }
 }
 
-impl OpenapiPathHttpContext {
+impl OpenapiPathFilter {
     fn get_openapi_path(&self, path: &str) -> Option<String> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
         if let Some(cache) = &self.cache {
@@ -205,12 +205,12 @@ mod tests {
 
     #[test]
     fn test_path_parameter_matching() {
-        let mut root_ctx = OpenapiPathRootContext::new();
+        let mut root_ctx = OpenapiPathRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathHttpContext {
+        let http_ctx = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_cache_behavior() {
-        let mut root_ctx = OpenapiPathRootContext::new();
+        let mut root_ctx = OpenapiPathRoot::new();
         let config = json!({
             "cache_size": 2,
             "paths": {
@@ -278,12 +278,12 @@ mod tests {
             .configure(&serde_json::from_str(&config).unwrap())
             .unwrap();
 
-        let http_ctx1 = OpenapiPathHttpContext {
+        let http_ctx1 = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
-        let http_ctx2 = OpenapiPathHttpContext {
+        let http_ctx2 = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -353,7 +353,7 @@ mod tests {
         ];
 
         for (config, expected_cache) in test_cases {
-            let mut root_ctx = OpenapiPathRootContext::new();
+            let mut root_ctx = OpenapiPathRoot::new();
             root_ctx.configure(&config).unwrap();
             match expected_cache {
                 Some(size) => {
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_cache_disabled_behavior() {
-        let mut root_ctx = OpenapiPathRootContext::new();
+        let mut root_ctx = OpenapiPathRoot::new();
         let config = json!({
             "cache_size": 0,
             "paths": {
@@ -395,7 +395,7 @@ mod tests {
             .configure(&serde_json::from_str(&config).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathHttpContext {
+        let http_ctx = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_invalid_config() {
-        let mut context = OpenapiPathRootContext::new();
+        let mut context = OpenapiPathRoot::new();
         let invalid_configs = vec![
             json!({}),
             json!({"paths": "string"}),
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_empty_paths() {
-        let mut root_ctx = OpenapiPathRootContext::new();
+        let mut root_ctx = OpenapiPathRoot::new();
         let config = json!({
             "cache_size": 1024,
             "paths": {}
@@ -439,7 +439,7 @@ mod tests {
             .configure(&serde_json::from_str(&config).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathHttpContext {
+        let http_ctx = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
