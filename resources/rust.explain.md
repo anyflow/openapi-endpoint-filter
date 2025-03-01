@@ -74,6 +74,7 @@ impl HttpContext for OpenapiPathHttpContext {
 Rust에서는 `Box<dyn Trait>`을 사용하여 Trait Object(동적 디스패치)를 지원합니다.
 
 > **dispatch**란? 호출 대상 method 결정 과정
+>
 > - **dynamic dispatch**: runtime 타입 결정. `dyn` 사용 (C++의 경우 `virtual`)
 > - **static dispatch**: compile time 타입 결정. `dyn` 없음 (C++의 경우 template)
 
