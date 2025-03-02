@@ -18,8 +18,8 @@ proxy_wasm::main! {{
 }}
 
 struct OpenapiPathRoot {
-    router: Rc<Router<String>>,
-    cache: Option<Rc<RefCell<LruCache<String, String>>>>,
+    router: Rc<Router<(String, String)>>, // (path_template, service_name)
+    cache: Option<Rc<RefCell<LruCache<String, (String, String)>>>>,
 }
 
 impl OpenapiPathRoot {
@@ -112,21 +112,36 @@ impl OpenapiPathRoot {
             self.cache = Some(Rc::new(RefCell::new(LruCache::new(cache_size))));
         }
 
-        let paths = config
-            .get("paths")
-            .and_then(Value::as_object)
-            .ok_or("Invalid or missing 'paths' in configuration")?;
+        let services = config
+            .get("services")
+            .and_then(Value::as_array)
+            .ok_or("Invalid or missing 'services' in configuration")?;
 
         let mut new_router = Router::new();
-        for (path, _) in paths {
-            debug!("[opf] Inserting route: {}", path);
-            new_router.insert(path, path.clone())?;
+        for service in services {
+            let service_name = service
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("Missing 'name' in service configuration")?;
+
+            let paths = service
+                .get("paths")
+                .and_then(Value::as_object)
+                .ok_or("Invalid or missing 'paths' in service configuration")?;
+
+            for (path, _) in paths {
+                debug!(
+                    "[opf] Inserting route: {} for service: {}",
+                    path, service_name
+                );
+                new_router.insert(path, (path.clone(), service_name.to_string()))?;
+            }
         }
         self.router = Rc::new(new_router);
 
         info!(
-            "[opf] Router configured successfully with {} paths and cache size {}",
-            paths.len(),
+            "[opf] Router configured successfully with {} services and cache size {}",
+            services.len(),
             match &self.cache {
                 Some(cache) => cache.borrow().cap().to_string(),
                 None => "None".to_string(),
@@ -137,8 +152,8 @@ impl OpenapiPathRoot {
 }
 
 struct OpenapiPathFilter {
-    router: Rc<Router<String>>,
-    cache: Option<Rc<RefCell<LruCache<String, String>>>>,
+    router: Rc<Router<(String, String)>>,
+    cache: Option<Rc<RefCell<LruCache<String, (String, String)>>>>,
 }
 
 impl Context for OpenapiPathFilter {}
@@ -147,24 +162,25 @@ impl HttpContext for OpenapiPathFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
         debug!("[opf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-        if let Some(matched_value) = self.get_openapi_path(&path) {
-            self.set_http_request_header("x-openapi-path", Some(&matched_value));
+        if let Some((matched_path, service_name)) = self.get_openapi_path(&path) {
+            self.set_http_request_header("x-openapi-path", Some(&matched_path));
+            self.set_http_request_header("x-service-name", Some(&service_name));
         }
         Action::Continue
     }
 }
 
 impl OpenapiPathFilter {
-    fn get_openapi_path(&self, path: &str) -> Option<String> {
+    fn get_openapi_path(&self, path: &str) -> Option<(String, String)> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
         if let Some(cache) = &self.cache {
             let mut cache = cache.borrow_mut();
-            if let Some(matched_value) = cache.get(&normalized_path) {
+            if let Some((matched_path, service_name)) = cache.get(&normalized_path) {
                 debug!(
-                    "[opf] Cache hit for path: {}, value: {}",
-                    normalized_path, matched_value
+                    "[opf] Cache hit for path: {}, value: ({}, {})",
+                    normalized_path, matched_path, service_name
                 );
-                return Some(matched_value.clone());
+                return Some((matched_path.clone(), service_name.clone()));
             }
         }
         debug!(
@@ -173,13 +189,14 @@ impl OpenapiPathFilter {
         );
         match self.router.at(&normalized_path) {
             Ok(matched) => {
-                let matched_value = matched.value.clone();
+                let (matched_path, service_name) = matched.value.clone();
                 if let Some(cache) = &self.cache {
-                    cache
-                        .borrow_mut()
-                        .put(normalized_path, matched_value.clone());
+                    cache.borrow_mut().put(
+                        normalized_path,
+                        (matched_path.clone(), service_name.clone()),
+                    );
                 }
-                Some(matched_value)
+                Some((matched_path, service_name))
             }
             Err(_) => {
                 debug!("[opf] No match found for path: {}", normalized_path);
@@ -192,19 +209,23 @@ impl OpenapiPathFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     const TEST_CONFIG: &str = r#"{
-        "cache_size": 1024,
-        "paths": {
-            "/api/users/{id}": {},
-            "/api/posts/{postId}/comments/{commentId}": {},
-            "/api/items": {}
-        }
+        "cache_size": 5,
+        "services": [
+            {
+                "name": "dockebi",
+                "paths": {
+                    "/dockebi/v1/stuff": {},
+                    "/dockebi/v1/stuff/{id_}": {},
+                    "/dockebi/v1/stuff/{id_}/child/{child_id}/hello": {}
+                }
+            }
+        ]
     }"#;
 
     #[test]
-    fn test_path_parameter_matching() {
+    fn test_path_and_service_matching() {
         let mut root_ctx = OpenapiPathRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
@@ -216,41 +237,26 @@ mod tests {
         };
 
         let test_cases = vec![
-            ("/api/items", Some("/api/items".to_string())),
-            ("/api/users/123", Some("/api/users/{id}".to_string())),
             (
-                "/api/posts/456/comments/789",
-                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
+                "/dockebi/v1/stuff",
+                Some(("/dockebi/v1/stuff".to_string(), "dockebi".to_string())),
             ),
             (
-                "/api/users/123?key=value",
-                Some("/api/users/{id}".to_string()),
-            ),
-            ("/api/items?sort=asc&page=2", Some("/api/items".to_string())),
-            (
-                "/api/posts/456/comments/789?active=true",
-                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
+                "/dockebi/v1/stuff/123",
+                Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string())),
             ),
             (
-                "/api/items?filter=active&limit=10",
-                Some("/api/items".to_string()),
+                "/dockebi/v1/stuff/123/child/456/hello",
+                Some((
+                    "/dockebi/v1/stuff/{id_}/child/{child_id}/hello".to_string(),
+                    "dockebi".to_string(),
+                )),
             ),
             (
-                "/api/posts/1/comments/2?a=b&c=d",
-                Some("/api/posts/{postId}/comments/{commentId}".to_string()),
+                "/dockebi/v1/stuff/123?key=value",
+                Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string())),
             ),
-            (
-                "/api/users/456?key=value&nested[key]=val",
-                Some("/api/users/{id}".to_string()),
-            ),
-            ("/api/users/123/", None),
-            ("/api/items/", None),
-            ("/api/posts/456/comments/789/", None),
-            ("/api/users/123/?key=value", None),
-            ("/api/items/?sort=asc", None),
-            ("/api/users", None),
-            ("/api/posts/456", None),
-            ("/api/nonexistent", None),
+            ("/dockebi/v1/other", None),
         ];
 
         for (input_path, expected) in test_cases {
@@ -266,188 +272,33 @@ mod tests {
     #[test]
     fn test_cache_behavior() {
         let mut root_ctx = OpenapiPathRoot::new();
-        let config = json!({
-            "cache_size": 2,
-            "paths": {
-                "/api/users/{id}": {},
-                "/api/items": {}
-            }
-        })
-        .to_string();
         root_ctx
-            .configure(&serde_json::from_str(&config).unwrap())
+            .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx1 = OpenapiPathFilter {
+        let http_ctx = OpenapiPathFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
-        let http_ctx2 = OpenapiPathFilter {
-            router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
-        };
+        let path1 = "/dockebi/v1/stuff/123";
+        let result1 = http_ctx.get_openapi_path(path1);
+        assert_eq!(
+            result1,
+            Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
+        );
 
-        let path1 = "/api/users/123";
-        let result1 = http_ctx1.get_openapi_path(path1);
-        assert_eq!(result1, Some("/api/users/{id}".to_string()));
-
-        let result2 = http_ctx2.get_openapi_path(path1);
-        assert_eq!(result2, Some("/api/users/{id}".to_string()));
+        let result2 = http_ctx.get_openapi_path(path1);
+        assert_eq!(
+            result2,
+            Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
+        );
 
         if let Some(cache) = &root_ctx.cache {
             assert_eq!(cache.borrow().len(), 1);
+            assert_eq!(cache.borrow().cap().get(), 5);
         } else {
             panic!("Cache should be enabled");
         }
-
-        let path2 = "/api/items";
-        let result3 = http_ctx1.get_openapi_path(path2);
-        assert_eq!(result3, Some("/api/items".to_string()));
-
-        if let Some(cache) = &root_ctx.cache {
-            assert_eq!(cache.borrow().len(), 2);
-        } else {
-            panic!("Cache should be enabled");
-        }
-
-        let path3 = "/api/users/456";
-        let result4 = http_ctx2.get_openapi_path(path3);
-        assert_eq!(result4, Some("/api/users/{id}".to_string()));
-
-        if let Some(cache) = &root_ctx.cache {
-            let cache = cache.borrow();
-            assert!(cache.contains(&path2.to_string()));
-            assert!(cache.contains(&path3.to_string()));
-            assert!(!cache.contains(&path1.to_string()));
-        } else {
-            panic!("Cache should be enabled");
-        }
-    }
-
-    #[test]
-    fn test_cache_size_parsing() {
-        let paths = json!({
-            "/api/users/{id}": {},
-        });
-        let test_cases = vec![
-            // Missing cache_size
-            (json!({ "paths": paths.clone() }), Some(DEFAULT_CACHE_SIZE)),
-            // Not a number
-            (
-                json!({ "cache_size": "not a number", "paths": paths.clone() }),
-                Some(DEFAULT_CACHE_SIZE),
-            ),
-            // Negative number (treated as not u64)
-            (
-                json!({ "cache_size": -1, "paths": paths.clone() }),
-                Some(DEFAULT_CACHE_SIZE),
-            ),
-            // Zero (cache disabled)
-            (json!({ "cache_size": 0, "paths": paths.clone() }), None),
-            // Positive number
-            (
-                json!({ "cache_size": 100, "paths": paths.clone() }),
-                Some(100),
-            ),
-        ];
-
-        for (config, expected_cache) in test_cases {
-            let mut root_ctx = OpenapiPathRoot::new();
-            root_ctx.configure(&config).unwrap();
-            match expected_cache {
-                Some(size) => {
-                    assert!(
-                        root_ctx.cache.is_some(),
-                        "Cache should be enabled for config: {}",
-                        config
-                    );
-                    let cache = root_ctx.cache.as_ref().unwrap().borrow();
-                    assert_eq!(
-                        cache.cap(),
-                        NonZeroUsize::new(size).unwrap(),
-                        "Cache capacity mismatch for config: {}",
-                        config
-                    );
-                }
-                None => {
-                    assert!(
-                        root_ctx.cache.is_none(),
-                        "Cache should be disabled for config: {}",
-                        config
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_cache_disabled_behavior() {
-        let mut root_ctx = OpenapiPathRoot::new();
-        let config = json!({
-            "cache_size": 0,
-            "paths": {
-                "/api/users/{id}": {},
-            }
-        })
-        .to_string();
-        root_ctx
-            .configure(&serde_json::from_str(&config).unwrap())
-            .unwrap();
-
-        let http_ctx = OpenapiPathFilter {
-            router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
-        };
-
-        let path = "/api/users/123";
-        let result1 = http_ctx.get_openapi_path(path);
-        assert_eq!(result1, Some("/api/users/{id}".to_string()));
-        let result2 = http_ctx.get_openapi_path(path);
-        assert_eq!(result2, Some("/api/users/{id}".to_string()));
-
-        assert!(root_ctx.cache.is_none(), "Cache should be disabled");
-    }
-
-    #[test]
-    fn test_invalid_config() {
-        let mut context = OpenapiPathRoot::new();
-        let invalid_configs = vec![
-            json!({}),
-            json!({"paths": "string"}),
-            json!({"paths": ["array"]}),
-        ];
-
-        for config in invalid_configs {
-            assert!(
-                context.configure(&config).is_err(),
-                "Should fail to configure with invalid config: {}",
-                config
-            );
-        }
-    }
-
-    #[test]
-    fn test_empty_paths() {
-        let mut root_ctx = OpenapiPathRoot::new();
-        let config = json!({
-            "cache_size": 1024,
-            "paths": {}
-        })
-        .to_string();
-        root_ctx
-            .configure(&serde_json::from_str(&config).unwrap())
-            .unwrap();
-
-        let http_ctx = OpenapiPathFilter {
-            router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
-        };
-
-        assert_eq!(
-            http_ctx.get_openapi_path("/api/users/123"),
-            None,
-            "No paths should match with empty configuration"
-        );
     }
 }

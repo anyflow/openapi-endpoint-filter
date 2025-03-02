@@ -17,3 +17,5 @@ spec:
               value: request.method
             request_path:
               value: request.headers['x-openapi-path']
+            request_service:
+              value: request.headers['x-service-name']

@@ -13,7 +13,9 @@ spec:
   priority: 10 # 같은 phase 내에서의 우선순위 (높을수록 먼저 실행)
   pluginConfig:
     cache_size: 5
-    paths:
-      /dockebi/v1/stuff: {}
-      /dockebi/v1/stuff/{id_}: {}
-      /dockebi/v1/stuff/{id_}/child/{child_id}/hello: {}
+    services:
+      - name: dockebi
+        paths:
+          /dockebi/v1/stuff: {}
+          /dockebi/v1/stuff/{id_}: {}
+          /dockebi/v1/stuff/{id_}/child/{child_id}/hello: {}
