@@ -19,3 +19,13 @@ spec:
           /dockebi/v1/stuff: {}
           /dockebi/v1/stuff/{id_}: {}
           /dockebi/v1/stuff/{id_}/child/{child_id}/hello: {}
+      - name: userservice
+        paths:
+          /users: {}
+          /users/{id}: {}
+          /users/{id}/profile: {}
+      - name: productservice
+        paths:
+          /products: {}
+          /products/{product_id}: {}
+          /categories/{category_id}/products: {}

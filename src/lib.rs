@@ -209,6 +209,7 @@ impl OpenapiPathFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const TEST_CONFIG: &str = r#"{
         "cache_size": 5,
@@ -220,12 +221,51 @@ mod tests {
                     "/dockebi/v1/stuff/{id_}": {},
                     "/dockebi/v1/stuff/{id_}/child/{child_id}/hello": {}
                 }
+            },
+            {
+                "name": "userservice",
+                "paths": {
+                    "/users": {},
+                    "/users/{id}": {},
+                    "/users/{id}/profile": {}
+                }
+            },
+            {
+                "name": "productservice",
+                "paths": {
+                    "/products": {},
+                    "/products/{product_id}": {},
+                    "/categories/{category_id}/products": {}
+                }
+            }
+        ]
+    }"#;
+
+    const MINIMAL_CONFIG: &str = r#"{
+        "services": [
+            {
+                "name": "minimal",
+                "paths": {
+                    "/test": {}
+                }
+            }
+        ]
+    }"#;
+
+    const DISABLE_CACHE_CONFIG: &str = r#"{
+        "cache_size": 0,
+        "services": [
+            {
+                "name": "nocache",
+                "paths": {
+                    "/api/v1/test": {}
+                }
             }
         ]
     }"#;
 
     #[test]
-    fn test_path_and_service_matching() {
+    fn test_basic_path_and_service_matching() {
         let mut root_ctx = OpenapiPathRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
@@ -257,6 +297,37 @@ mod tests {
                 Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string())),
             ),
             ("/dockebi/v1/other", None),
+            (
+                "/users",
+                Some(("/users".to_string(), "userservice".to_string())),
+            ),
+            (
+                "/users/42",
+                Some(("/users/{id}".to_string(), "userservice".to_string())),
+            ),
+            (
+                "/users/42/profile",
+                Some(("/users/{id}/profile".to_string(), "userservice".to_string())),
+            ),
+            (
+                "/products",
+                Some(("/products".to_string(), "productservice".to_string())),
+            ),
+            (
+                "/products/xyz123",
+                Some((
+                    "/products/{product_id}".to_string(),
+                    "productservice".to_string(),
+                )),
+            ),
+            (
+                "/categories/furniture/products",
+                Some((
+                    "/categories/{category_id}/products".to_string(),
+                    "productservice".to_string(),
+                )),
+            ),
+            ("/unknownpath", None),
         ];
 
         for (input_path, expected) in test_cases {
@@ -264,6 +335,46 @@ mod tests {
             assert_eq!(
                 result, expected,
                 "Path '{}' should match '{:?}' but got '{:?}'",
+                input_path, expected, result
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_normalization() {
+        let mut root_ctx = OpenapiPathRoot::new();
+        root_ctx
+            .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
+            .unwrap();
+
+        let http_ctx = OpenapiPathFilter {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+        };
+
+        let test_cases = vec![
+            (
+                "/users/42?sortBy=name&order=asc",
+                Some(("/users/{id}".to_string(), "userservice".to_string())),
+            ),
+            (
+                "/products?category=electronics&inStock=true",
+                Some(("/products".to_string(), "productservice".to_string())),
+            ),
+            (
+                "/categories/books/products?featured=true&limit=10",
+                Some((
+                    "/categories/{category_id}/products".to_string(),
+                    "productservice".to_string(),
+                )),
+            ),
+        ];
+
+        for (input_path, expected) in test_cases {
+            let result = http_ctx.get_openapi_path(input_path);
+            assert_eq!(
+                result, expected,
+                "Path with query params '{}' should match '{:?}' but got '{:?}'",
                 input_path, expected, result
             );
         }
@@ -281,6 +392,7 @@ mod tests {
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
+        // First access - should go to the router
         let path1 = "/dockebi/v1/stuff/123";
         let result1 = http_ctx.get_openapi_path(path1);
         assert_eq!(
@@ -288,17 +400,261 @@ mod tests {
             Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
         );
 
+        // Second access - should be served from cache
         let result2 = http_ctx.get_openapi_path(path1);
         assert_eq!(
             result2,
             Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
         );
 
+        // Verify cache state
         if let Some(cache) = &root_ctx.cache {
             assert_eq!(cache.borrow().len(), 1);
             assert_eq!(cache.borrow().cap().get(), 5);
+
+            // Check that the item is in the cache
+            assert!(cache.borrow().contains(&path1.to_string()));
         } else {
             panic!("Cache should be enabled");
         }
+
+        // Fill up the cache and test LRU behavior
+        http_ctx.get_openapi_path("/users"); // 2nd item
+        http_ctx.get_openapi_path("/users/1"); // 3rd item
+        http_ctx.get_openapi_path("/products"); // 4th item
+        http_ctx.get_openapi_path("/products/123"); // 5th item
+
+        // This should evict the oldest item (path1)
+        http_ctx.get_openapi_path("/categories/tech/products");
+
+        if let Some(cache) = &root_ctx.cache {
+            assert_eq!(cache.borrow().len(), 5);
+            // The oldest item should be evicted
+            assert!(!cache.borrow().contains(&path1.to_string()));
+        } else {
+            panic!("Cache should be enabled");
+        }
+    }
+
+    #[test]
+    fn test_default_cache_size() {
+        let mut root_ctx = OpenapiPathRoot::new();
+        root_ctx
+            .configure(&serde_json::from_str(MINIMAL_CONFIG).unwrap())
+            .unwrap();
+
+        if let Some(cache) = &root_ctx.cache {
+            assert_eq!(cache.borrow().cap().get(), DEFAULT_CACHE_SIZE);
+        } else {
+            panic!("Cache should be enabled by default");
+        }
+    }
+
+    #[test]
+    fn test_disabled_cache() {
+        let mut root_ctx = OpenapiPathRoot::new();
+        root_ctx
+            .configure(&serde_json::from_str(DISABLE_CACHE_CONFIG).unwrap())
+            .unwrap();
+
+        assert!(
+            root_ctx.cache.is_none(),
+            "Cache should be disabled when cache_size is 0"
+        );
+
+        let http_ctx = OpenapiPathFilter {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+        };
+
+        // The path should still match correctly even with cache disabled
+        let path = "/api/v1/test";
+        let result = http_ctx.get_openapi_path(path);
+        assert_eq!(
+            result,
+            Some(("/api/v1/test".to_string(), "nocache".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_complex_path_patterns() {
+        let config = json!({
+            "services": [
+                {
+                    "name": "complexapi",
+                    "paths": {
+                        "/api/v1/resources/{resource_id}/subresources/{subresource_id}/items/{item_id}": {},
+                        "/api/v1/users/{user_id}/orders/{order_id}/items/{item_id}/tracking": {},
+                        "/{tenant_id}/dashboard": {}
+                    }
+                }
+            ]
+        });
+
+        let mut root_ctx = OpenapiPathRoot::new();
+        root_ctx.configure(&config).unwrap();
+
+        let http_ctx = OpenapiPathFilter {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+        };
+
+        let test_cases = vec![
+            (
+                "/api/v1/resources/r123/subresources/sub456/items/i789",
+                Some((
+                    "/api/v1/resources/{resource_id}/subresources/{subresource_id}/items/{item_id}"
+                        .to_string(),
+                    "complexapi".to_string(),
+                )),
+            ),
+            (
+                "/api/v1/users/u123/orders/o456/items/i789/tracking",
+                Some((
+                    "/api/v1/users/{user_id}/orders/{order_id}/items/{item_id}/tracking"
+                        .to_string(),
+                    "complexapi".to_string(),
+                )),
+            ),
+            (
+                "/tenant1/dashboard",
+                Some((
+                    "/{tenant_id}/dashboard".to_string(),
+                    "complexapi".to_string(),
+                )),
+            ),
+            ("/api/v1/resources/r123/something_else", None),
+        ];
+
+        for (input_path, expected) in test_cases {
+            let result = http_ctx.get_openapi_path(input_path);
+            assert_eq!(
+                result, expected,
+                "Complex path '{}' should match '{:?}' but got '{:?}'",
+                input_path, expected, result
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_configurations() {
+        let test_cases = vec![
+            // Missing services array
+            (
+                json!({
+                    "cache_size": 10
+                }),
+                "Invalid or missing 'services' in configuration",
+            ),
+            // Service without name
+            (
+                json!({
+                    "services": [
+                        {
+                            "paths": {
+                                "/test": {}
+                            }
+                        }
+                    ]
+                }),
+                "Missing 'name' in service configuration",
+            ),
+            // Service without paths
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test"
+                        }
+                    ]
+                }),
+                "Invalid or missing 'paths' in service configuration",
+            ),
+            // Invalid paths type
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test",
+                            "paths": "invalid"
+                        }
+                    ]
+                }),
+                "Invalid or missing 'paths' in service configuration",
+            ),
+        ];
+
+        for (config, expected_error) in test_cases {
+            let mut root_ctx = OpenapiPathRoot::new();
+            let result = root_ctx.configure(&config);
+
+            assert!(result.is_err(), "Configuration should fail: {:?}", config);
+            let error = result.err().unwrap();
+            assert!(
+                error.to_string().contains(expected_error),
+                "Error message should contain '{}', but got '{}'",
+                expected_error,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiple_service_overlapping_routes() {
+        let config = json!({
+            "services": [
+                {
+                    "name": "service1",
+                    "paths": {
+                        "/api/v1/shared": {},
+                        "/api/v1/service1/specific": {}
+                    }
+                },
+                {
+                    "name": "service2",
+                    "paths": {
+                        "/api/v1/shared/{id}": {},
+                        "/api/v1/service2/specific": {}
+                    }
+                }
+            ]
+        });
+
+        let mut root_ctx = OpenapiPathRoot::new();
+        root_ctx.configure(&config).unwrap();
+
+        let http_ctx = OpenapiPathFilter {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+        };
+
+        // For exact path matches, the first service should win
+        assert_eq!(
+            http_ctx.get_openapi_path("/api/v1/shared"),
+            Some(("/api/v1/shared".to_string(), "service1".to_string()))
+        );
+
+        // For parameterized paths, the match should work correctly
+        assert_eq!(
+            http_ctx.get_openapi_path("/api/v1/shared/123"),
+            Some(("/api/v1/shared/{id}".to_string(), "service2".to_string()))
+        );
+
+        // Service-specific paths should go to the correct service
+        assert_eq!(
+            http_ctx.get_openapi_path("/api/v1/service1/specific"),
+            Some((
+                "/api/v1/service1/specific".to_string(),
+                "service1".to_string()
+            ))
+        );
+
+        assert_eq!(
+            http_ctx.get_openapi_path("/api/v1/service2/specific"),
+            Some((
+                "/api/v1/service2/specific".to_string(),
+                "service2".to_string()
+            ))
+        );
     }
 }
