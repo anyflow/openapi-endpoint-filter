@@ -18,8 +18,8 @@ proxy_wasm::main! {{
 }}
 
 struct OpenapiPathRoot {
-    router: Rc<Router<(String, String)>>, // (path_template, service_name)
-    cache: Option<Rc<RefCell<LruCache<String, (String, String)>>>>,
+    router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
+    cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
 impl OpenapiPathRoot {
@@ -134,7 +134,7 @@ impl OpenapiPathRoot {
                     "[opf] Inserting route: {} for service: {}",
                     path, service_name
                 );
-                new_router.insert(path, (path.clone(), service_name.to_string()))?;
+                new_router.insert(path, (path.clone(), Rc::new(service_name.to_string())))?;
             }
         }
         self.router = Rc::new(new_router);
@@ -152,8 +152,8 @@ impl OpenapiPathRoot {
 }
 
 struct OpenapiPathFilter {
-    router: Rc<Router<(String, String)>>,
-    cache: Option<Rc<RefCell<LruCache<String, (String, String)>>>>,
+    router: Rc<Router<(String, Rc<String>)>>,
+    cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
 impl Context for OpenapiPathFilter {}
@@ -171,7 +171,7 @@ impl HttpContext for OpenapiPathFilter {
 }
 
 impl OpenapiPathFilter {
-    fn get_openapi_path(&self, path: &str) -> Option<(String, String)> {
+    fn get_openapi_path(&self, path: &str) -> Option<(String, Rc<String>)> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
         if let Some(cache) = &self.cache {
             let mut cache = cache.borrow_mut();
@@ -180,7 +180,7 @@ impl OpenapiPathFilter {
                     "[opf] Cache hit for path: {}, value: ({}, {})",
                     normalized_path, matched_path, service_name
                 );
-                return Some((matched_path.clone(), service_name.clone()));
+                return Some((matched_path.clone(), Rc::clone(&service_name)));
             }
         }
         debug!(
@@ -193,7 +193,7 @@ impl OpenapiPathFilter {
                 if let Some(cache) = &self.cache {
                     cache.borrow_mut().put(
                         normalized_path,
-                        (matched_path.clone(), service_name.clone()),
+                        (matched_path.clone(), Rc::clone(&service_name)),
                     );
                 }
                 Some((matched_path, service_name))
@@ -279,52 +279,70 @@ mod tests {
         let test_cases = vec![
             (
                 "/dockebi/v1/stuff",
-                Some(("/dockebi/v1/stuff".to_string(), "dockebi".to_string())),
+                Some((
+                    "/dockebi/v1/stuff".to_string(),
+                    Rc::new("dockebi".to_string()),
+                )),
             ),
             (
                 "/dockebi/v1/stuff/123",
-                Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string())),
+                Some((
+                    "/dockebi/v1/stuff/{id_}".to_string(),
+                    Rc::new("dockebi".to_string()),
+                )),
             ),
             (
                 "/dockebi/v1/stuff/123/child/456/hello",
                 Some((
                     "/dockebi/v1/stuff/{id_}/child/{child_id}/hello".to_string(),
-                    "dockebi".to_string(),
+                    Rc::new("dockebi".to_string()),
                 )),
             ),
             (
                 "/dockebi/v1/stuff/123?key=value",
-                Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string())),
+                Some((
+                    "/dockebi/v1/stuff/{id_}".to_string(),
+                    Rc::new("dockebi".to_string()),
+                )),
             ),
             ("/dockebi/v1/other", None),
             (
                 "/users",
-                Some(("/users".to_string(), "userservice".to_string())),
+                Some(("/users".to_string(), Rc::new("userservice".to_string()))),
             ),
             (
                 "/users/42",
-                Some(("/users/{id}".to_string(), "userservice".to_string())),
+                Some((
+                    "/users/{id}".to_string(),
+                    Rc::new("userservice".to_string()),
+                )),
             ),
             (
                 "/users/42/profile",
-                Some(("/users/{id}/profile".to_string(), "userservice".to_string())),
+                Some((
+                    "/users/{id}/profile".to_string(),
+                    Rc::new("userservice".to_string()),
+                )),
             ),
             (
                 "/products",
-                Some(("/products".to_string(), "productservice".to_string())),
+                Some((
+                    "/products".to_string(),
+                    Rc::new("productservice".to_string()),
+                )),
             ),
             (
                 "/products/xyz123",
                 Some((
                     "/products/{product_id}".to_string(),
-                    "productservice".to_string(),
+                    Rc::new("productservice".to_string()),
                 )),
             ),
             (
                 "/categories/furniture/products",
                 Some((
                     "/categories/{category_id}/products".to_string(),
-                    "productservice".to_string(),
+                    Rc::new("productservice".to_string()),
                 )),
             ),
             ("/unknownpath", None),
@@ -355,17 +373,23 @@ mod tests {
         let test_cases = vec![
             (
                 "/users/42?sortBy=name&order=asc",
-                Some(("/users/{id}".to_string(), "userservice".to_string())),
+                Some((
+                    "/users/{id}".to_string(),
+                    Rc::new("userservice".to_string()),
+                )),
             ),
             (
                 "/products?category=electronics&inStock=true",
-                Some(("/products".to_string(), "productservice".to_string())),
+                Some((
+                    "/products".to_string(),
+                    Rc::new("productservice".to_string()),
+                )),
             ),
             (
                 "/categories/books/products?featured=true&limit=10",
                 Some((
                     "/categories/{category_id}/products".to_string(),
-                    "productservice".to_string(),
+                    Rc::new("productservice".to_string()),
                 )),
             ),
         ];
@@ -397,14 +421,20 @@ mod tests {
         let result1 = http_ctx.get_openapi_path(path1);
         assert_eq!(
             result1,
-            Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
+            Some((
+                "/dockebi/v1/stuff/{id_}".to_string(),
+                Rc::new("dockebi".to_string())
+            ))
         );
 
         // Second access - should be served from cache
         let result2 = http_ctx.get_openapi_path(path1);
         assert_eq!(
             result2,
-            Some(("/dockebi/v1/stuff/{id_}".to_string(), "dockebi".to_string()))
+            Some((
+                "/dockebi/v1/stuff/{id_}".to_string(),
+                Rc::new("dockebi".to_string())
+            ))
         );
 
         // Verify cache state
@@ -472,7 +502,7 @@ mod tests {
         let result = http_ctx.get_openapi_path(path);
         assert_eq!(
             result,
-            Some(("/api/v1/test".to_string(), "nocache".to_string()))
+            Some(("/api/v1/test".to_string(), Rc::new("nocache".to_string())))
         );
     }
 
@@ -505,7 +535,7 @@ mod tests {
                 Some((
                     "/api/v1/resources/{resource_id}/subresources/{subresource_id}/items/{item_id}"
                         .to_string(),
-                    "complexapi".to_string(),
+                    Rc::new("complexapi".to_string()),
                 )),
             ),
             (
@@ -513,14 +543,14 @@ mod tests {
                 Some((
                     "/api/v1/users/{user_id}/orders/{order_id}/items/{item_id}/tracking"
                         .to_string(),
-                    "complexapi".to_string(),
+                    Rc::new("complexapi".to_string()),
                 )),
             ),
             (
                 "/tenant1/dashboard",
                 Some((
                     "/{tenant_id}/dashboard".to_string(),
-                    "complexapi".to_string(),
+                    Rc::new("complexapi".to_string()),
                 )),
             ),
             ("/api/v1/resources/r123/something_else", None),
@@ -631,13 +661,19 @@ mod tests {
         // For exact path matches, the first service should win
         assert_eq!(
             http_ctx.get_openapi_path("/api/v1/shared"),
-            Some(("/api/v1/shared".to_string(), "service1".to_string()))
+            Some((
+                "/api/v1/shared".to_string(),
+                Rc::new("service1".to_string())
+            ))
         );
 
         // For parameterized paths, the match should work correctly
         assert_eq!(
             http_ctx.get_openapi_path("/api/v1/shared/123"),
-            Some(("/api/v1/shared/{id}".to_string(), "service2".to_string()))
+            Some((
+                "/api/v1/shared/{id}".to_string(),
+                Rc::new("service2".to_string())
+            ))
         );
 
         // Service-specific paths should go to the correct service
@@ -645,7 +681,7 @@ mod tests {
             http_ctx.get_openapi_path("/api/v1/service1/specific"),
             Some((
                 "/api/v1/service1/specific".to_string(),
-                "service1".to_string()
+                Rc::new("service1".to_string())
             ))
         );
 
@@ -653,7 +689,7 @@ mod tests {
             http_ctx.get_openapi_path("/api/v1/service2/specific"),
             Some((
                 "/api/v1/service2/specific".to_string(),
-                "service2".to_string()
+                Rc::new("service2".to_string())
             ))
         );
     }

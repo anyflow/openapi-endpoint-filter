@@ -11,6 +11,7 @@ spec:
   imagePullPolicy: Always
   phase: AUTHN # 실행 단계 설정 - Istio 트레이싱 필터보다 앞서 실행되도록
   priority: 10 # 같은 phase 내에서의 우선순위 (높을수록 먼저 실행)
+  failStrategy: FAIL_OPEN # fatal error 경우 이 wasm을 bypass하도록
   pluginConfig:
     cache_size: 5
     services:
