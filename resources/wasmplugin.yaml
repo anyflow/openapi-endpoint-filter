@@ -7,7 +7,7 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/openapi-path-filter:0.1.9
+  url: anyflow/openapi-path-filter:0.2.0
   imagePullPolicy: Always
   phase: AUTHN # 실행 단계 설정 - Istio 트레이싱 필터보다 앞서 실행되도록
   priority: 10 # 같은 phase 내에서의 우선순위 (높을수록 먼저 실행)

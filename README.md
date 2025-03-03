@@ -21,6 +21,9 @@ A Rust-based Istio WASM filter that injects a Prometheus label representing the 
 - ✅ **LRU 캐시 도입**: `lru` lib 사용. single thread 환경이므로 lock 고민 불필요
   - ✅ **cache_size < 0 or invalid(없음 포함)**: default 처리 (1024)
   - ✅ **cache_size == 0**: cache disable
+- ✅ Service 별 openapi 삽입 가능하도록. service name은 `x-service-name` header로 전달
+- 🚧 Service 별 openapi 삽입 기능 포함 unit test 정리
+- 🚧 [`EnvoyFilter`](https://istio.io/v1.11/docs/ops/configuration/extensibility/wasm-module-distribution/) 를 이용한 WASM loading for vm ID 일치화
 - 🚧 각종 예외 처리(각종 오류 상황에 host에 outage 발생 안하도록)
 - 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: runtime 검증용. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야.
 
