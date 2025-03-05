@@ -100,7 +100,7 @@ impl RootContext for OpenapiPathRoot {
 impl OpenapiPathRoot {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
         let size = config
-            .get("cache_size")
+            .get("cacheSize")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_CACHE_SIZE as u64);
 
@@ -196,6 +196,10 @@ impl OpenapiPathFilter {
                         (matched_path.clone(), Rc::clone(&service_name)),
                     );
                 }
+                debug!(
+                    "[opf] {} matched and cached with {}, {}",
+                    path, service_name, matched_path
+                );
                 Some((matched_path, service_name))
             }
             Err(_) => {
@@ -212,7 +216,7 @@ mod tests {
     use serde_json::json;
 
     const TEST_CONFIG: &str = r#"{
-        "cache_size": 5,
+        "cacheSize": 5,
         "services": [
             {
                 "name": "dockebi",
@@ -253,7 +257,7 @@ mod tests {
     }"#;
 
     const DISABLE_CACHE_CONFIG: &str = r#"{
-        "cache_size": 0,
+        "cacheSize": 0,
         "services": [
             {
                 "name": "nocache",
@@ -572,7 +576,7 @@ mod tests {
             // Missing services array
             (
                 json!({
-                    "cache_size": 10
+                    "cacheSize": 10
                 }),
                 "Invalid or missing 'services' in configuration",
             ),

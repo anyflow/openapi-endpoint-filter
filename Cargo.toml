@@ -1,7 +1,13 @@
 [package]
 name = "openapi-path-filter"
-version = "0.2.0"
+version = "0.2.1"
+authors = ["Park Hyunjeong <anyflow@gmail.com>"]
+readme = "README.md"
+license = "Apache-2.0"
+license-file = "LICENSE"
+repository = "https://github.com/anyflow/openapi-path-filter"
 edition = "2021"
+
 
 [lib]
 crate-type = ["cdylib"]      # WASM 모듈로 컴파일하기 위해 필요
@@ -11,7 +17,7 @@ path = "src/lib.rs"          # 라이브러리 소스 위치
 
 [dependencies]
 proxy-wasm = "0.2.2"
-serde_json = "1.0.139"
+serde_json = "1.0.140"
 matchit = "0.8.6"
 log = "0.4.26"
 lru = "0.13.0"

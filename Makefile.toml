@@ -1,6 +1,8 @@
+env_files = [".env"]
+
 [env]
 VERSION = "${CARGO_MAKE_CRATE_VERSION}"
-IMAGE = "anyflow/openapi-path-filter:${VERSION}"
+IMAGE = "${DOCKER_IMAGE_PATH}:${VERSION}"
 
 [tasks.clean]
 command = "cargo"
@@ -42,3 +44,12 @@ dependencies = [
 
 [tasks.clean-all]
 dependencies = ["clean", "all"]
+
+[tasks.show-env]
+description = "환경 변수 출력하기"
+script = '''
+#!/usr/bin/env bash
+echo "CARGO_MAKE_WORKING_DIRECTORY: ${CARGO_MAKE_WORKING_DIRECTORY}"
+echo "CARGO_MAKE_LOAD_ENV_FILES: ${CARGO_MAKE_LOAD_ENV_FILES}"
+echo "DOCKER_IMAGE_PATH: ${DOCKER_IMAGE_PATH}"
+'''
