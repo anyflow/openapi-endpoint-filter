@@ -1,74 +1,77 @@
-# openapi-path-filter
+# `path-template-filter`
 
 ## Introduction
 
-A Rust-based Istio Proxy-Wasm filter that injects the OpenAPI based path template of a request path into the request header. The header value can be used in a Istio metric label.
+A Rust-based Istio Proxy-Wasm plugin that injects the OpenAPI-derived path template of a request path into the request header, enabling its use as a value in Istio metric labels.
+
+## Motivation
+
+- The smallest unit for traffic identification in Istio metrics is the workload. However, Identification at the endpoint (path + method) level is highly useful in the real world.
+- While the Istio `Telemetry` API allows adding method and path labels for identification, it cannot map a path to its corresponding template that includes any path parameters, making endpoint-level identification impossible.
+- [Classifying Metrics Based on Request or Response](https://istio.io/latest/docs/tasks/observability/metrics/classify-metrics/) discusses endpoint-level identification using the [`attributegen`](https://github.com/istio-ecosystem/wasm-extensions/tree/master/extensions/attributegen) plugin, but the plugin's path matching algorithm relies on regex and scan operations, resulting in performance issues. Additionally, converting OpenAPI path templates into regex-based patterns is required.
 
 ## Features
 
-- **OpenAPI path template 식별**: request path에 해당하는 path template을 `x-openapi-path` request header로 추가
-  - **`x-openapi-path` 값을 Istio metric label로 추가 가능**: Istio `Telemetry` API의 `tagOverrides` 사용을 통해. [`./resources/telemetry.yaml`](./resources/telemetry.yaml) 참조
-- **고성능 path matching**: Radix tree 기반의 `matchit` crate 사용. [benchmark 결과 가장 빠르다고](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks).
-- **OpenAPI path syntax 사용**: OpenAPI 문서 변환 불필요. 문서 그대로 config에 삽입 가능.(가독성을 위해 path template 이외의 항목 제거 추천). [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml) 참조
-- **다수의 OpenAPI 문서 지원**: `name` field는 해당 OpenAPI 문서의 서비스 명칭으로 `x-service-name` request header로 추가. [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml) 참조
+- **OpenAPI Path Template Identification**: Adds the path template corresponding to the request path as the `x-path-template` request header.
+  - **Add `x-path-template` value as an Istio metric label**: Achievable using the `tagOverrides` in the Istio `Telemetry` API. Refer to [`./resources/telemetry.yaml`](./resources/telemetry.yaml).
+- **High-Performance Path Matching**: Utilizes the Radix tree-based `matchit` crate. [Benchmarks show it’s the fastest](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks).
+- **Uses OpenAPI Path Syntax**: No need to transform OpenAPI documents. You can insert them directly into the config as-is (though removing items other than path templates is recommended for readability). Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
+- **Support for Multiple OpenAPI Documents**: The `name` field represents the service name of the respective OpenAPI document and is added as the `x-service-name` request header, which can be used in the same manner as `x-path-template` for Istio metric label. Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 
-- **LRU cache 지원**: config로 cache size 조절 가능. [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml) 참조
+- **LRU Cache Support**: Cache size can be adjusted via config. Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 
 ## Getting started
 
 ```shell
-# Rust 설치. 참고로 macOS에서 brew로 설치하면 정상 compile안됨. 따라서 Rust 공식 설치 Path를 따라야.
+# Install Rust. Note: Installing via brew on macOS may not compile correctly. Follow the official Rust installation path instead.
 > curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# cargo-make 설치 (빌드 도구. Makefile.toml 참고)
+# Install cargo-make (build tool; refer to Makefile.toml).
 > cargo install cargo-make
 
-# wasm-opt (bynaryen) 설치 (macOS의 경우. 타 OS의 경우 별도 방법 필요. 설치 안될 경우 Makefile.toml의 optimize-wasm task 제거로 본 step skip 가능)
+# Install wasm-opt (binaryen) (for macOS; other OSes require a different method. If installation fails, skip this step by removing the optimize-wasm task from Makefile.toml).
 > brew install binaryen
 
-# .env을 root에 생성 및 DOCKER_IMAGE_PATH 설정. 아래는 예
-DOCKER_IMAGE_PATH=anyflow/openapi-path-filter
+# Create a .env file at the root and set DOCKER_IMAGE_PATH. Example below:
+DOCKER_IMAGE_PATH=anyflow/path-template-filter
 
-# test -> rust build -> image optimization -> docker build -> docker push
+# Run tests -> Rust build -> Image optimization -> Docker build -> Docker push
 > cargo make deploy
 ```
 
-## runtime 테스트 방법 in Istio
+## How to Test at Runtime in Istio
 
 ```shell
-
-# 대상 pod wasm log level을 debug로 변경
+# Change the WASM log level of the target pod to debug.
 > istioctl pc log -n <namespace name> <pod name> --level wasm:debug
 
-# openapi-path-filter 만 logging
-> k logs -n <namespace name> <pod name> -f | grep -F '[opf]'
+# Filter logs to show only path-template-filter.
+> k logs -n <namespace name> <pod name> -f | grep -F '[ptf]'
 
-# resource/telemetry.yaml 적용: x-openapi-path header, method를 각각 request_path, request_method란 metric label로 넣기 위함
+# Apply resources/telemetry.yaml: To use the x-path-template header and method as metric labels `request_path` and `request_method`.
 > kubectl apply -f telemetry.yaml
 
-# resources/wasmplugin.yaml 적용: 정상 loading 여부 확인을 위한 log 확인. e.g. "[opf] Router configured successfully"
+# Apply resources/wasmplugin.yaml: Check logs to confirm successful loading, e.g., "[ptf] Router configured successfully".
 > kubectl apply -f wasmplugin.yaml
 
-# curl로 호출 후 log에 matching 여부 matching 성공 log가 나오는지 확인.
-# e.g. [opf] /dockebi/v1/stuff matched and cached with dockebi, /dockebi/v1/stuff
+# Make a curl request and verify if the matching success log appears, e.g., "[ptf] /dockebi/v1/stuff matched and cached with dockebi, /dockebi/v1/stuff".
 ```
+
+## Notes
+
+### About the `[ptf]` Log Prefix
+
+Used for log grepping. Grepping with just path-template-filter` isn’t feasible because, as shown below, it’s automatically included in some cases but not in others.
+
+- `2025-02-23T20:30:59.970615Z debug envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1192 wasm log cluster.path-template-filter: [ptf] Creating HTTP context thread=29`
+- `2025-02-23T20:28:39.632084Z info envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: [ptf] Router configured successfully thread=20`
+
+### About Verifying WASM Unloading
+
+Even after running `kubectl delete -f wasmplugin.yaml`, the WASM isn’t immediately removed from Envoy; it seems to take 30–60 seconds. You can confirm this with logs like the one below. If you need to test new WASM behavior, remove the existing WASM, wait for the message below, and then load the new WASM.
+
+- `2025-02-23T19:35:58.014282Z     info    envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: path-template-filter terminated        thread=20`
 
 ## License
 
-openapi-path-filter is released under version 2.0 of the Apache License.
-
-## 참고
-
-### `[opf]` log prefix에 관하여
-
-log grep 용. `openapi-path-filter` 만 갖고는 전체 `grep` 불가하기 때문. 아래 첫 번째처럼 `openapi-path-filter` 가 자동으로 붙는 경우도 있지만 두 번째처럼 안붙는 경우도 있기 때문.
-
-- `2025-02-23T20:30:59.970615Z     debug   envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1192 wasm log cluster.openapi-path-filter: [opf] Creating HTTP context       thread=29`
-- `2025-02-23T20:28:39.632084Z     info    envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: [opf] Router configured successfully  thread=20`
-
-
-### wasm unloading 확인 방법에 관하여
-
-`kubectl delete -f wasmplugin.yaml` 을 하더라도 그 즉시 wasm이 Envoy에서 삭제되는 것이 아닌 30s ~ 60s이 지난 후에 삭제되는 듯. 아래와 같은 로그로 확인 가능. 새로운 wasm 동작 확인 필요 시 기존 wasm 제거 후 아래 메시지 확인 후 새 wasm 로드 필요.
-
-- `2025-02-23T19:35:58.014282Z     info    envoy wasm external/envoy/source/extensions/common/wasm/context.cc:1195 wasm log: openapi-path-filter terminated        thread=20`
+`path-template-filter` is released under version 2.0 of the Apache License.

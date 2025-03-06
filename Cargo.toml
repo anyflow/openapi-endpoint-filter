@@ -1,18 +1,18 @@
 [package]
-name = "openapi-path-filter"
-version = "0.2.1"
+name = "path-template-filter"
+version = "0.2.2"
 authors = ["Park Hyunjeong <anyflow@gmail.com>"]
 readme = "README.md"
 license = "Apache-2.0"
 license-file = "LICENSE"
-repository = "https://github.com/anyflow/openapi-path-filter"
+repository = "https://github.com/anyflow/path-template-filter"
 edition = "2021"
 
 
 [lib]
-crate-type = ["cdylib"]      # WASM 모듈로 컴파일하기 위해 필요
-name = "openapi_path_filter" # 라이브러리 이름은 반드시 언더스코어 사용
-path = "src/lib.rs"          # 라이브러리 소스 위치
+crate-type = ["cdylib"]       # WASM 모듈로 컴파일하기 위해 필요
+name = "path_template_filter" # 라이브러리 이름은 반드시 언더스코어 사용
+path = "src/lib.rs"           # 라이브러리 소스 위치
 
 
 [dependencies]

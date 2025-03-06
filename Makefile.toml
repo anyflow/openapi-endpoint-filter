@@ -20,9 +20,9 @@ args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
 command = "wasm-opt"
 args = [
     "-Os",
-    "target/wasm32-unknown-unknown/release/openapi_path_filter.wasm",
+    "target/wasm32-unknown-unknown/release/path_template_filter.wasm",
     "-o",
-    "target/wasm32-unknown-unknown/release/openapi_path_filter.optimized.wasm",
+    "target/wasm32-unknown-unknown/release/path_template_filter.optimized.wasm",
 ]
 
 [tasks.build-docker]
@@ -52,7 +52,5 @@ dependencies = ["clean", "deploy"]
 description = "환경 변수 출력하기"
 script = '''
 #!/usr/bin/env bash
-echo "CARGO_MAKE_WORKING_DIRECTORY: ${CARGO_MAKE_WORKING_DIRECTORY}"
-echo "CARGO_MAKE_LOAD_ENV_FILES: ${CARGO_MAKE_LOAD_ENV_FILES}"
 echo "DOCKER_IMAGE_PATH: ${DOCKER_IMAGE_PATH}"
 '''

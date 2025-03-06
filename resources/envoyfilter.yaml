@@ -1,7 +1,7 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
-  name: openapi-path-filter
+  name: path-template-filter
   namespace: cluster
 spec:
   workloadSelector:
@@ -28,7 +28,7 @@ spec:
                 code:
                   remote:
                     http_uri:
-                      uri: https://github.com/anyflow/openapi-path-filter/releases/download/0.2.0/openapi_path_filter.optimized.wasm
+                      uri: https://github.com/anyflow/path-template-filter/releases/download/0.2.0/openapi_path_filter.optimized.wasm
                       timeout: 10s # 다운로드 타임아웃 (임의 설정)
               configuration:
                 "@type": "type.googleapis.com/google.protobuf.StringValue"

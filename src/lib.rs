@@ -13,16 +13,16 @@ static DEFAULT_CACHE_SIZE: usize = 1024;
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(OpenapiPathRoot::new())
+        Box::new(PathTemplateRoot::new())
     });
 }}
 
-struct OpenapiPathRoot {
+struct PathTemplateRoot {
     router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
-impl OpenapiPathRoot {
+impl PathTemplateRoot {
     fn new() -> Self {
         Self {
             router: Rc::new(Router::new()),
@@ -33,16 +33,16 @@ impl OpenapiPathRoot {
     }
 }
 
-impl Context for OpenapiPathRoot {
+impl Context for PathTemplateRoot {
     fn on_done(&mut self) -> bool {
-        info!("[opf] openapi-path-filter terminated");
+        info!("[ptf] path-template-filter terminated");
         true
     }
 }
 
-impl RootContext for OpenapiPathRoot {
+impl RootContext for PathTemplateRoot {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("[opf] openapi-path-filter initialized");
+        info!("[ptf] path-template-filter initialized");
         true
     }
 
@@ -51,11 +51,11 @@ impl RootContext for OpenapiPathRoot {
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
-        debug!("[opf] Configuring openapi-path-filter");
+        debug!("[ptf] Configuring path-template-filter");
         let config_bytes = match self.get_plugin_configuration() {
             Some(bytes) => bytes,
             None => {
-                error!("[opf] No plugin configuration found");
+                error!("[ptf] No plugin configuration found");
                 return false;
             }
         };
@@ -63,7 +63,7 @@ impl RootContext for OpenapiPathRoot {
         let config_str = match String::from_utf8(config_bytes) {
             Ok(s) => s,
             Err(e) => {
-                error!("[opf] Failed to convert bytes to UTF-8 string: {}", e);
+                error!("[ptf] Failed to convert bytes to UTF-8 string: {}", e);
                 return false;
             }
         };
@@ -71,33 +71,33 @@ impl RootContext for OpenapiPathRoot {
         let config: Value = match serde_json::from_str(&config_str) {
             Ok(v) => v,
             Err(e) => {
-                error!("[opf] Failed to parse JSON configuration: {}", e);
+                error!("[ptf] Failed to parse JSON configuration: {}", e);
                 return false;
             }
         };
 
         match self.configure(&config) {
             Ok(_) => {
-                info!("[opf] Configuration successful");
+                info!("[ptf] Configuration successful");
                 true
             }
             Err(e) => {
-                error!("[opf] Configuration failed: {}", e);
+                error!("[ptf] Configuration failed: {}", e);
                 false
             }
         }
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
-        debug!("[opf] Creating HTTP context");
-        Some(Box::new(OpenapiPathFilter {
+        debug!("[ptf] Creating HTTP context");
+        Some(Box::new(PathTemplateFilter {
             router: Rc::clone(&self.router),
             cache: self.cache.as_ref().map(Rc::clone),
         }))
     }
 }
 
-impl OpenapiPathRoot {
+impl PathTemplateRoot {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
         let size = config
             .get("cacheSize")
@@ -131,7 +131,7 @@ impl OpenapiPathRoot {
 
             for (path, _) in paths {
                 debug!(
-                    "[opf] Inserting route: {} for service: {}",
+                    "[ptf] Inserting route: {} for service: {}",
                     path, service_name
                 );
                 new_router.insert(path, (path.clone(), Rc::new(service_name.to_string())))?;
@@ -140,7 +140,7 @@ impl OpenapiPathRoot {
         self.router = Rc::new(new_router);
 
         info!(
-            "[opf] Router configured successfully with {} services and cache size {}",
+            "[ptf] Router configured successfully with {} services and cache size {}",
             services.len(),
             match &self.cache {
                 Some(cache) => cache.borrow().cap().to_string(),
@@ -151,40 +151,40 @@ impl OpenapiPathRoot {
     }
 }
 
-struct OpenapiPathFilter {
+struct PathTemplateFilter {
     router: Rc<Router<(String, Rc<String>)>>,
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
-impl Context for OpenapiPathFilter {}
+impl Context for PathTemplateFilter {}
 
-impl HttpContext for OpenapiPathFilter {
+impl HttpContext for PathTemplateFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
-        debug!("[opf] Getting the path from header");
+        debug!("[ptf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-        if let Some((matched_path, service_name)) = self.get_openapi_path(&path) {
-            self.set_http_request_header("x-openapi-path", Some(&matched_path));
+        if let Some((matched_path, service_name)) = self.get_path_template(&path) {
+            self.set_http_request_header("x-path-template", Some(&matched_path));
             self.set_http_request_header("x-service-name", Some(&service_name));
         }
         Action::Continue
     }
 }
 
-impl OpenapiPathFilter {
-    fn get_openapi_path(&self, path: &str) -> Option<(String, Rc<String>)> {
+impl PathTemplateFilter {
+    fn get_path_template(&self, path: &str) -> Option<(String, Rc<String>)> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
         if let Some(cache) = &self.cache {
             let mut cache = cache.borrow_mut();
             if let Some((matched_path, service_name)) = cache.get(&normalized_path) {
                 debug!(
-                    "[opf] Cache hit for path: {}, value: ({}, {})",
+                    "[ptf] Cache hit for path: {}, value: ({}, {})",
                     normalized_path, matched_path, service_name
                 );
                 return Some((matched_path.clone(), Rc::clone(&service_name)));
             }
         }
         debug!(
-            "[opf] Cache miss or cache disabled for path: {}",
+            "[ptf] Cache miss or cache disabled for path: {}",
             normalized_path
         );
         match self.router.at(&normalized_path) {
@@ -197,13 +197,13 @@ impl OpenapiPathFilter {
                     );
                 }
                 debug!(
-                    "[opf] {} matched and cached with {}, {}",
+                    "[ptf] {} matched and cached with {}, {}",
                     path, service_name, matched_path
                 );
                 Some((matched_path, service_name))
             }
             Err(_) => {
-                debug!("[opf] No match found for path: {}", normalized_path);
+                debug!("[ptf] No match found for path: {}", normalized_path);
                 None
             }
         }
@@ -270,12 +270,12 @@ mod tests {
 
     #[test]
     fn test_basic_path_and_service_matching() {
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -353,7 +353,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_openapi_path(input_path);
+            let result = http_ctx.get_path_template(input_path);
             assert_eq!(
                 result, expected,
                 "Path '{}' should match '{:?}' but got '{:?}'",
@@ -364,12 +364,12 @@ mod tests {
 
     #[test]
     fn test_path_normalization() {
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -399,7 +399,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_openapi_path(input_path);
+            let result = http_ctx.get_path_template(input_path);
             assert_eq!(
                 result, expected,
                 "Path with query params '{}' should match '{:?}' but got '{:?}'",
@@ -410,19 +410,19 @@ mod tests {
 
     #[test]
     fn test_cache_behavior() {
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         // First access - should go to the router
         let path1 = "/dockebi/v1/stuff/123";
-        let result1 = http_ctx.get_openapi_path(path1);
+        let result1 = http_ctx.get_path_template(path1);
         assert_eq!(
             result1,
             Some((
@@ -432,7 +432,7 @@ mod tests {
         );
 
         // Second access - should be served from cache
-        let result2 = http_ctx.get_openapi_path(path1);
+        let result2 = http_ctx.get_path_template(path1);
         assert_eq!(
             result2,
             Some((
@@ -453,13 +453,13 @@ mod tests {
         }
 
         // Fill up the cache and test LRU behavior
-        http_ctx.get_openapi_path("/users"); // 2nd item
-        http_ctx.get_openapi_path("/users/1"); // 3rd item
-        http_ctx.get_openapi_path("/products"); // 4th item
-        http_ctx.get_openapi_path("/products/123"); // 5th item
+        http_ctx.get_path_template("/users"); // 2nd item
+        http_ctx.get_path_template("/users/1"); // 3rd item
+        http_ctx.get_path_template("/products"); // 4th item
+        http_ctx.get_path_template("/products/123"); // 5th item
 
         // This should evict the oldest item (path1)
-        http_ctx.get_openapi_path("/categories/tech/products");
+        http_ctx.get_path_template("/categories/tech/products");
 
         if let Some(cache) = &root_ctx.cache {
             assert_eq!(cache.borrow().len(), 5);
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_default_cache_size() {
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx
             .configure(&serde_json::from_str(MINIMAL_CONFIG).unwrap())
             .unwrap();
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_disabled_cache() {
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx
             .configure(&serde_json::from_str(DISABLE_CACHE_CONFIG).unwrap())
             .unwrap();
@@ -496,14 +496,14 @@ mod tests {
             "Cache should be disabled when cache_size is 0"
         );
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         // The path should still match correctly even with cache disabled
         let path = "/api/v1/test";
-        let result = http_ctx.get_openapi_path(path);
+        let result = http_ctx.get_path_template(path);
         assert_eq!(
             result,
             Some(("/api/v1/test".to_string(), Rc::new("nocache".to_string())))
@@ -525,10 +525,10 @@ mod tests {
             ]
         });
 
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx.configure(&config).unwrap();
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -561,7 +561,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_openapi_path(input_path);
+            let result = http_ctx.get_path_template(input_path);
             assert_eq!(
                 result, expected,
                 "Complex path '{}' should match '{:?}' but got '{:?}'",
@@ -619,7 +619,7 @@ mod tests {
         ];
 
         for (config, expected_error) in test_cases {
-            let mut root_ctx = OpenapiPathRoot::new();
+            let mut root_ctx = PathTemplateRoot::new();
             let result = root_ctx.configure(&config);
 
             assert!(result.is_err(), "Configuration should fail: {:?}", config);
@@ -654,17 +654,17 @@ mod tests {
             ]
         });
 
-        let mut root_ctx = OpenapiPathRoot::new();
+        let mut root_ctx = PathTemplateRoot::new();
         root_ctx.configure(&config).unwrap();
 
-        let http_ctx = OpenapiPathFilter {
+        let http_ctx = PathTemplateFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
 
         // For exact path matches, the first service should win
         assert_eq!(
-            http_ctx.get_openapi_path("/api/v1/shared"),
+            http_ctx.get_path_template("/api/v1/shared"),
             Some((
                 "/api/v1/shared".to_string(),
                 Rc::new("service1".to_string())
@@ -673,7 +673,7 @@ mod tests {
 
         // For parameterized paths, the match should work correctly
         assert_eq!(
-            http_ctx.get_openapi_path("/api/v1/shared/123"),
+            http_ctx.get_path_template("/api/v1/shared/123"),
             Some((
                 "/api/v1/shared/{id}".to_string(),
                 Rc::new("service2".to_string())
@@ -682,7 +682,7 @@ mod tests {
 
         // Service-specific paths should go to the correct service
         assert_eq!(
-            http_ctx.get_openapi_path("/api/v1/service1/specific"),
+            http_ctx.get_path_template("/api/v1/service1/specific"),
             Some((
                 "/api/v1/service1/specific".to_string(),
                 Rc::new("service1".to_string())
@@ -690,7 +690,7 @@ mod tests {
         );
 
         assert_eq!(
-            http_ctx.get_openapi_path("/api/v1/service2/specific"),
+            http_ctx.get_path_template("/api/v1/service2/specific"),
             Some((
                 "/api/v1/service2/specific".to_string(),
                 Rc::new("service2".to_string())
