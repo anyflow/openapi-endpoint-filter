@@ -30,7 +30,7 @@ A Rust-based Istio Proxy-Wasm filter that injects the OpenAPI based path templat
 DOCKER_IMAGE_PATH=anyflow/openapi-path-filter
 
 # test -> rust build -> image optimization -> docker build -> docker push
-> cargo make clean-all
+> cargo make deploy
 ```
 
 ## runtime 테스트 방법 in Istio

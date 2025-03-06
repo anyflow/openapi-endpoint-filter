@@ -9,9 +9,13 @@
 - ✅ Fast fail, optimization 포함 build step 정렬
 - ✅ Single thread 용으로 전환(`Rc<T>` 사용). proxy WASM은 single thread로 동작하므로
 - ✅ **LRU 캐시 도입**: `lru` lib 사용. single thread 환경이므로 lock 고민 불필요
-	- ✅ **cache_size < 0 or invalid(없음 포함)**: default 처리 (1024)
-	- ✅ **cache_size == 0**: cache disable
+  - ✅ **cache_size < 0 or invalid(없음 포함)**: default 처리 (1024)
+  - ✅ **cache_size == 0**: cache disable
 - ✅ Service 별 openapi 삽입 가능하도록. service name은 `x-service-name` header로 전달
+- ✅ wasm logic 오류 시 wasm bypass하도록: `failStrategy: FAIL_OPEN` 을 `WasmPlugin` 에 적용
+  - 참고 #1: `FAIL_CLOSE` 시 5XX error 발생(`RootContext`에서는 panic시 즉각 500, `HttpContext`에서는 장시간 no response 및 강제 connection 종료 시 503 발생. 테스트 시 기존 wasm이 terminated된 상태를 반드시 확인하고 wasm을 load해야 기존 configuration로 인한 오동작을 피할 수 있음)
+  - 참고 #2: wasm image이 없는 경우에는 `failStrategy` 에 관계 없이 bypass로 동작함
 - 🚧 [`EnvoyFilter`](https://istio.io/v1.11/docs/ops/configuration/extensibility/wasm-module-distribution/) 를 이용한 WASM loading for vm ID 일치화
-- 🚧 예외 처리: image 없을 경우 host에 outage 발생 안하도록
-- 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록: runtime 검증용. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야.
+  - metric을 통해 기본 동작이 어떻게 되는지를 좀더 살필 필요 있음. Default로 wasm VM 또는 rntime이 동작하여 이를 활용한다는 이야기도 있고
+- 🚧 `proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }` 사용하여 테스트 가능하도록
+  - runtime 검증 용이성 증대. 이게 되기 전까지는 [runtime 테스트 방법 in istio](#runtime-테스트-방법-in-istio) 로 검증해야

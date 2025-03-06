@@ -33,7 +33,7 @@ args = ["build", "-t", "${IMAGE}", "."]
 command = "docker"
 args = ["push", "${IMAGE}"]
 
-[tasks.all]
+[tasks.deploy]
 dependencies = [
     "test",
     "build-wasm",
@@ -42,8 +42,11 @@ dependencies = [
     "push-docker",
 ]
 
-[tasks.clean-all]
-dependencies = ["clean", "all"]
+[tasks.deploy-skip-test]
+dependencies = ["build-wasm", "optimize-wasm", "build-docker", "push-docker"]
+
+[tasks.deploy-clean]
+dependencies = ["clean", "deploy"]
 
 [tasks.show-env]
 description = "환경 변수 출력하기"
