@@ -2,7 +2,7 @@
 
 ## Introduction
 
-A Rust-based Istio Proxy-Wasm plugin that injects the OpenAPI-derived path template of a request path into the request header, enabling its use as a value in Istio metric labels.
+A Rust-based Istio/Envoy Proxy-Wasm plugin that injects the OpenAPI-derived path template of a request path into the request header, enabling its use as a value in Istio metric labels.
 
 ## Motivation
 
@@ -14,7 +14,7 @@ A Rust-based Istio Proxy-Wasm plugin that injects the OpenAPI-derived path templ
 
 - **OpenAPI Path Template Identification**: Adds the path template corresponding to the request path as the `x-path-template` request header.
   - **Add `x-path-template` value as an Istio metric label**: Achievable using the `tagOverrides` in the Istio `Telemetry` API. Refer to [`./resources/telemetry.yaml`](./resources/telemetry.yaml).
-- **High-Performance Path Matching**: Utilizes the Radix tree-based `matchit` crate. [Benchmarks show it’s the fastest](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks).
+- **High-Performance Path Matching**: Utilizes the Radix tree-based path matching algorithm via `matchit` crate, [whose own benchmarks report it as the fastest](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks).
 - **Uses OpenAPI Path Syntax**: No need to transform OpenAPI documents. You can insert them directly into the config as-is (though removing items other than path templates is recommended for readability). Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 - **Support for Multiple OpenAPI Documents**: The `name` field represents the service name of the respective OpenAPI document and is added as the `x-service-name` request header, which can be used in the same manner as `x-path-template` for Istio metric label. Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 
@@ -48,7 +48,7 @@ DOCKER_IMAGE_PATH=anyflow/path-template-filter
 # Filter logs to show only path-template-filter.
 > k logs -n <namespace name> <pod name> -f | grep -F '[ptf]'
 
-# Apply resources/telemetry.yaml: To use the x-path-template header and method as metric labels `request_path` and `request_method`.
+# Apply resources/telemetry.yaml: To use the x-path-template, x-service-name headers and the method as metric labels `request_path`, `request_service` and `request_method`.
 > kubectl apply -f telemetry.yaml
 
 # Apply resources/wasmplugin.yaml: Check logs to confirm successful loading, e.g., "[ptf] Router configured successfully".

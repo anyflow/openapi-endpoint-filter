@@ -9,9 +9,8 @@ spec:
         - name: prometheus
       overrides:
         - match:
-            # metric: REQUEST_COUNT
             metric: ALL_METRICS # https://istio.io/latest/docs/reference/config/telemetry/#MetricSelector-IstioMetric
-            mode: CLIENT_AND_SERVER # https://istio.io/latest/docs/reference/config/telemetry/#WorkloadMode
+            mode: SERVER # https://istio.io/latest/docs/reference/config/telemetry/#WorkloadMode
           tagOverrides:
             request_method:
               value: request.method

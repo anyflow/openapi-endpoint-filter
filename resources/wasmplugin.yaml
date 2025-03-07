@@ -7,11 +7,11 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/path-template-filter:0.2.1
+  url: anyflow/path-template-filter:0.2.2
   imagePullPolicy: Always
-  phase: AUTHN # 실행 단계 설정 - Istio 트레이싱 필터보다 앞서 실행되도록
-  priority: 10 # 같은 phase 내에서의 우선순위 (높을수록 먼저 실행)
-  failStrategy: FAIL_OPEN # fatal error 경우 이 wasm을 bypass하도록
+  phase: STATS # Applies the filter before the istio.stats filter in the Envoy filter chain.
+  failStrategy: FAIL_OPEN # Configures the filter to be non-critical; bypasses the filter on fatal errors.
+  #  priority: 10
   pluginConfig:
     cacheSize: 5
     services:
