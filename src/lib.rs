@@ -51,6 +51,7 @@ impl RootContext for PathTemplateRoot {
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
+        panic!("intended!");
         debug!("[ptf] Configuring path-template-filter");
         let config_bytes = match self.get_plugin_configuration() {
             Some(bytes) => bytes,
