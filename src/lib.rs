@@ -160,6 +160,7 @@ impl Context for PathTemplateFilter {}
 
 impl HttpContext for PathTemplateFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
+        panic!("intended!");
         debug!("[ptf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
         if let Some((matched_path, service_name)) = self.get_path_template(&path) {
