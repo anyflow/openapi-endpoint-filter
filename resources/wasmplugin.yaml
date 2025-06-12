@@ -7,7 +7,7 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/path-template-filter:0.2.2
+  url: anyflow/path-template-filter:0.2.4
   imagePullPolicy: Always
   phase: STATS # Applies the filter before the istio.stats filter in the Envoy filter chain.
   failStrategy: FAIL_OPEN # Configures the filter to be non-critical; bypasses the filter on fatal errors.

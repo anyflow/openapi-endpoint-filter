@@ -16,5 +16,7 @@ spec:
               value: request.method
             request_path:
               value: request.headers['x-path-template']
+            api_endpoint:
+              value: request.headers['x-api-endpoint']
             request_service:
               value: request.headers['x-service-name']

@@ -162,10 +162,25 @@ impl HttpContext for PathTemplateFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
         debug!("[ptf] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-        if let Some((matched_path, service_name)) = self.get_path_template(&path) {
-            self.set_http_request_header("x-path-template", Some(&matched_path));
-            self.set_http_request_header("x-service-name", Some(&service_name));
-        }
+        let method = self
+            .get_http_request_header(":method")
+            .unwrap_or("unknown".to_string());
+        let (path_template, service_name) = self
+            .get_path_template(&path)
+            .map(|(matched_path, service_name)| (matched_path, service_name))
+            .unwrap_or(("unknown".to_string(), Rc::new("unknown".to_string())));
+
+        self.set_http_request_header("x-service-name", Some(&service_name));
+        self.set_http_request_header("x-path-template", Some(&path_template));
+        self.set_http_request_header(
+            "x-api-endpoint",
+            Some(&if method == "unknown" && path_template == "unknown" {
+                "unknown".to_string()
+            } else {
+                format!("{} {}", method, path_template)
+            }),
+        );
+
         Action::Continue
     }
 }
