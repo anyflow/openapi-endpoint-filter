@@ -9,14 +9,14 @@ spec:
         - name: prometheus
       overrides:
         - match:
-            metric: ALL_METRICS # https://istio.io/latest/docs/reference/config/telemetry/#MetricSelector-IstioMetric
-            mode: SERVER # https://istio.io/latest/docs/reference/config/telemetry/#WorkloadMode
-          tagOverrides:
+            metric: ALL_METRICS # Refer to https://istio.io/latest/docs/reference/config/telemetry/#MetricSelector-IstioMetric
+            mode: CLIENT_AND_SERVER # Refer to https://istio.io/latest/docs/reference/config/telemetry/#WorkloadMode
+          tagOverrides: # (Required) Map header values to metric labels
             request_method:
-              value: request.method
-            request_path:
-              value: request.headers['x-path-template']
+              value: request.method # (Example) HTTP method
             api_endpoint:
-              value: request.headers['x-api-endpoint']
+              value: request.headers['x-api-endpoint'] # (Example) x-api-endpoint header added by the plugin
+            request_path:
+              value: request.headers['x-path-template'] # (Example) x-path-template header added by the plugin
             request_service:
-              value: request.headers['x-service-name']
+              value: request.headers['x-service-name'] # (Example) x-service-name header added by the plugin

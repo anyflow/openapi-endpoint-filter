@@ -1,2 +1,2 @@
 FROM scratch
-COPY target/wasm32-unknown-unknown/release/path_template_filter.optimized.wasm /plugin.wasm
+COPY target/wasm32-unknown-unknown/release/openapi_endpoint_filter.optimized.wasm /plugin.wasm

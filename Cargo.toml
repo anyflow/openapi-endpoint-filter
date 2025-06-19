@@ -1,26 +1,26 @@
 [package]
-name = "path-template-filter"
-version = "0.2.4"
+name = "openapi-endpoint-filter"
+version = "0.2.5"
 authors = ["Park Hyunjeong <anyflow@gmail.com>"]
 readme = "README.md"
 license = "Apache-2.0"
 license-file = "LICENSE"
-repository = "https://github.com/anyflow/path-template-filter"
+repository = "https://github.com/anyflow/openapi-endpoint-filter"
 edition = "2021"
 
 
 [lib]
-crate-type = ["cdylib"]       # WASM 모듈로 컴파일하기 위해 필요
-name = "path_template_filter" # 라이브러리 이름은 반드시 언더스코어 사용
-path = "src/lib.rs"           # 라이브러리 소스 위치
+crate-type = ["cdylib"]          # Required for compiling as a WASM module
+name = "openapi_endpoint_filter" # Library name must use underscores
+path = "src/lib.rs"              # Library source location
 
 
 [dependencies]
-proxy-wasm = "0.2.2"
+proxy-wasm = "0.2.3"
 serde_json = "1.0.140"
 matchit = "0.8.6"
-log = "0.4.26"
-lru = "0.13.0"
+log = "0.4.27"
+lru = "0.14.0"
 
 [dev-dependencies]
 # proxy-wasm-test-framework = { git = "https://github.com/proxy-wasm/test-framework" }

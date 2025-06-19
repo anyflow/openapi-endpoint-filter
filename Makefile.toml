@@ -20,9 +20,9 @@ args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
 command = "wasm-opt"
 args = [
     "-Os",
-    "target/wasm32-unknown-unknown/release/path_template_filter.wasm",
+    "target/wasm32-unknown-unknown/release/openapi_endpoint_filter.wasm",
     "-o",
-    "target/wasm32-unknown-unknown/release/path_template_filter.optimized.wasm",
+    "target/wasm32-unknown-unknown/release/openapi_endpoint_filter.optimized.wasm",
 ]
 
 [tasks.build-docker]
@@ -35,6 +35,7 @@ args = ["push", "${IMAGE}"]
 
 [tasks.deploy]
 dependencies = [
+    "clean",
     "test",
     "build-wasm",
     "optimize-wasm",

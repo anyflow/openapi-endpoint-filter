@@ -1,22 +1,24 @@
 apiVersion: extensions.istio.io/v1alpha1
 kind: WasmPlugin
 metadata:
-  name: path-template-filter
+  name: openapi-endpoint-filter
   namespace: cluster
 spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/path-template-filter:0.2.4
+  url: anyflow/openapi-endpoint-filter:0.2.5
   imagePullPolicy: Always
-  phase: STATS # Applies the filter before the istio.stats filter in the Envoy filter chain.
-  failStrategy: FAIL_OPEN # Configures the filter to be non-critical; bypasses the filter on fatal errors.
-  #  priority: 10
+  phase: STATS # (Recommended) Apply before the istio.stats filter
+  failStrategy: FAIL_OPEN # (Recommended) Bypass the filter on fatal errors
+  match:
+    - mode: CLIENT_AND_SERVER # WasmPlugin default mode is CLIENT_AND_SERVER
+  # priority: 10
   pluginConfig:
-    cacheSize: 5
-    services:
-      - name: dockebi
-        paths:
+    cacheSize: 5 # (Optional) LRU cache size for path matching results. Default is 1024. Set 0 to disable cache.
+    services: # (Required) Register OpenAPI path templates for multiple services
+      - name: dockebi # (Required) Service name, added as x-service-name header
+        paths: # (Required) List OpenAPI path templates as-is
           /dockebi/v1/stuff: {}
           /dockebi/v1/stuff/{id_}: {}
           /dockebi/v1/stuff/{id_}/child/{child_id}/hello: {}

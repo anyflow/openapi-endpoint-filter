@@ -13,16 +13,16 @@ static DEFAULT_CACHE_SIZE: usize = 1024;
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
     proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
-        Box::new(PathTemplateRoot::new())
+        Box::new(OpenapiEndpointRoot::new())
     });
 }}
 
-struct PathTemplateRoot {
+struct OpenapiEndpointRoot {
     router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
-impl PathTemplateRoot {
+impl OpenapiEndpointRoot {
     fn new() -> Self {
         Self {
             router: Rc::new(Router::new()),
@@ -33,16 +33,16 @@ impl PathTemplateRoot {
     }
 }
 
-impl Context for PathTemplateRoot {
+impl Context for OpenapiEndpointRoot {
     fn on_done(&mut self) -> bool {
-        info!("[ptf] path-template-filter terminated");
+        info!("[oef] openapi-endpoint-filter terminated");
         true
     }
 }
 
-impl RootContext for PathTemplateRoot {
+impl RootContext for OpenapiEndpointRoot {
     fn on_vm_start(&mut self, _vm_configuration_size: usize) -> bool {
-        info!("[ptf] path-template-filter initialized");
+        info!("[oef] openapi-endpoint-filter initialized");
         true
     }
 
@@ -51,11 +51,11 @@ impl RootContext for PathTemplateRoot {
     }
 
     fn on_configure(&mut self, _: usize) -> bool {
-        debug!("[ptf] Configuring path-template-filter");
+        debug!("[oef] Configuring openapi-endpoint-filter");
         let config_bytes = match self.get_plugin_configuration() {
             Some(bytes) => bytes,
             None => {
-                error!("[ptf] No plugin configuration found");
+                error!("[oef] No plugin configuration found");
                 return false;
             }
         };
@@ -63,7 +63,7 @@ impl RootContext for PathTemplateRoot {
         let config_str = match String::from_utf8(config_bytes) {
             Ok(s) => s,
             Err(e) => {
-                error!("[ptf] Failed to convert bytes to UTF-8 string: {}", e);
+                error!("[oef] Failed to convert bytes to UTF-8 string: {}", e);
                 return false;
             }
         };
@@ -71,33 +71,33 @@ impl RootContext for PathTemplateRoot {
         let config: Value = match serde_json::from_str(&config_str) {
             Ok(v) => v,
             Err(e) => {
-                error!("[ptf] Failed to parse JSON configuration: {}", e);
+                error!("[oef] Failed to parse JSON configuration: {}", e);
                 return false;
             }
         };
 
         match self.configure(&config) {
             Ok(_) => {
-                info!("[ptf] Configuration successful");
+                info!("[oef] Configuration successful");
                 true
             }
             Err(e) => {
-                error!("[ptf] Configuration failed: {}", e);
+                error!("[oef] Configuration failed: {}", e);
                 false
             }
         }
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
-        debug!("[ptf] Creating HTTP context");
-        Some(Box::new(PathTemplateFilter {
+        debug!("[oef] Creating HTTP context");
+        Some(Box::new(OpenapiEndpointFilter {
             router: Rc::clone(&self.router),
             cache: self.cache.as_ref().map(Rc::clone),
         }))
     }
 }
 
-impl PathTemplateRoot {
+impl OpenapiEndpointRoot {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
         let size = config
             .get("cacheSize")
@@ -131,7 +131,7 @@ impl PathTemplateRoot {
 
             for (path, _) in paths {
                 debug!(
-                    "[ptf] Inserting route: {} for service: {}",
+                    "[oef] Inserting route: {} for service: {}",
                     path, service_name
                 );
                 new_router.insert(path, (path.clone(), Rc::new(service_name.to_string())))?;
@@ -140,7 +140,7 @@ impl PathTemplateRoot {
         self.router = Rc::new(new_router);
 
         info!(
-            "[ptf] Router configured successfully with {} services and cache size {}",
+            "[oef] Router configured successfully with {} services and cache size {}",
             services.len(),
             match &self.cache {
                 Some(cache) => cache.borrow().cap().to_string(),
@@ -151,16 +151,16 @@ impl PathTemplateRoot {
     }
 }
 
-struct PathTemplateFilter {
+struct OpenapiEndpointFilter {
     router: Rc<Router<(String, Rc<String>)>>,
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
 }
 
-impl Context for PathTemplateFilter {}
+impl Context for OpenapiEndpointFilter {}
 
-impl HttpContext for PathTemplateFilter {
+impl HttpContext for OpenapiEndpointFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
-        debug!("[ptf] Getting the path from header");
+        debug!("[oef] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
         let method = self
             .get_http_request_header(":method")
@@ -185,21 +185,21 @@ impl HttpContext for PathTemplateFilter {
     }
 }
 
-impl PathTemplateFilter {
+impl OpenapiEndpointFilter {
     fn get_path_template(&self, path: &str) -> Option<(String, Rc<String>)> {
         let normalized_path = path.split('?').next().unwrap_or("").to_string();
         if let Some(cache) = &self.cache {
             let mut cache = cache.borrow_mut();
             if let Some((matched_path, service_name)) = cache.get(&normalized_path) {
                 debug!(
-                    "[ptf] Cache hit for path: {}, value: ({}, {})",
+                    "[oef] Cache hit for path: {}, value: ({}, {})",
                     normalized_path, matched_path, service_name
                 );
                 return Some((matched_path.clone(), Rc::clone(&service_name)));
             }
         }
         debug!(
-            "[ptf] Cache miss or cache disabled for path: {}",
+            "[oef] Cache miss or cache disabled for path: {}",
             normalized_path
         );
         match self.router.at(&normalized_path) {
@@ -212,13 +212,13 @@ impl PathTemplateFilter {
                     );
                 }
                 debug!(
-                    "[ptf] {} matched and cached with {}, {}",
+                    "[oef] {} matched and cached with {}, {}",
                     path, service_name, matched_path
                 );
                 Some((matched_path, service_name))
             }
             Err(_) => {
-                debug!("[ptf] No match found for path: {}", normalized_path);
+                debug!("[oef] No match found for path: {}", normalized_path);
                 None
             }
         }
@@ -285,12 +285,12 @@ mod tests {
 
     #[test]
     fn test_basic_path_and_service_matching() {
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -379,12 +379,12 @@ mod tests {
 
     #[test]
     fn test_path_normalization() {
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -425,12 +425,12 @@ mod tests {
 
     #[test]
     fn test_cache_behavior() {
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
             .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
             .unwrap();
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_default_cache_size() {
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
             .configure(&serde_json::from_str(MINIMAL_CONFIG).unwrap())
             .unwrap();
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_disabled_cache() {
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
             .configure(&serde_json::from_str(DISABLE_CACHE_CONFIG).unwrap())
             .unwrap();
@@ -511,7 +511,7 @@ mod tests {
             "Cache should be disabled when cache_size is 0"
         );
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -540,10 +540,10 @@ mod tests {
             ]
         });
 
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx.configure(&config).unwrap();
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };
@@ -634,7 +634,7 @@ mod tests {
         ];
 
         for (config, expected_error) in test_cases {
-            let mut root_ctx = PathTemplateRoot::new();
+            let mut root_ctx = OpenapiEndpointRoot::new();
             let result = root_ctx.configure(&config);
 
             assert!(result.is_err(), "Configuration should fail: {:?}", config);
@@ -669,10 +669,10 @@ mod tests {
             ]
         });
 
-        let mut root_ctx = PathTemplateRoot::new();
+        let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx.configure(&config).unwrap();
 
-        let http_ctx = PathTemplateFilter {
+        let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
         };

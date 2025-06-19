@@ -1,7 +1,7 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
-  name: path-template-filter
+  name: openapi-endpoint-filter
   namespace: cluster
 spec:
   workloadSelector:
