@@ -21,6 +21,7 @@ struct OpenapiEndpointRoot {
     router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
     preserve_existing_headers: bool,
+    config_error: Option<String>,
 }
 
 impl OpenapiEndpointRoot {
@@ -31,6 +32,7 @@ impl OpenapiEndpointRoot {
                 NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
             )))),
             preserve_existing_headers: true,
+            config_error: None,
         }
     }
 }
@@ -57,37 +59,48 @@ impl RootContext for OpenapiEndpointRoot {
         let config_bytes = match self.get_plugin_configuration() {
             Some(bytes) => bytes,
             None => {
-                error!("[oef] No plugin configuration found");
-                return false;
+                error!("[oef] (ERR_NO_CONFIG) No plugin configuration found. Bypassing filter.");
+                self.config_error = Some("ERR_NO_CONFIG".to_string());
+                return true;
             }
         };
 
         let config_str = match String::from_utf8(config_bytes) {
             Ok(s) => s,
             Err(e) => {
-                error!("[oef] Failed to convert bytes to UTF-8 string: {}", e);
-                return false;
+                error!(
+                    "[oef] (ERR_UTF8) Failed to convert bytes to UTF-8: {}. Bypassing filter.",
+                    e
+                );
+                self.config_error = Some("ERR_UTF8".to_string());
+                return true;
             }
         };
 
         let config: Value = match serde_json::from_str(&config_str) {
             Ok(v) => v,
             Err(e) => {
-                error!("[oef] Failed to parse JSON configuration: {}", e);
-                return false;
+                error!(
+                    "[oef] (ERR_JSON) Failed to parse JSON: {}. Bypassing filter.",
+                    e
+                );
+                self.config_error = Some("ERR_JSON".to_string());
+                return true;
             }
         };
 
         match self.configure(&config) {
             Ok(_) => {
-                info!("[oef] Configuration successful");
-                true
+                info!("[oef] ✅ Configuration successful");
+                self.config_error = None;
             }
             Err(e) => {
-                error!("[oef] Configuration failed: {}", e);
-                false
+                error!("[oef] ❌ (ERR_PARSE) Configuration failed: {}", e);
+                error!("[oef] ⚠️  All requests will bypass filter (no metrics collected)");
+                self.config_error = Some("ERR_PARSE".to_string());
             }
         }
+        true
     }
 
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
@@ -96,34 +109,35 @@ impl RootContext for OpenapiEndpointRoot {
             router: Rc::clone(&self.router),
             cache: self.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: self.preserve_existing_headers,
+            config_error: self.config_error.clone(),
         }))
     }
 }
 
 impl OpenapiEndpointRoot {
     fn configure(&mut self, config: &Value) -> Result<(), Box<dyn std::error::Error>> {
-        self.preserve_existing_headers = config
+        // === Phase 1: Parse and validate (no mutations to self) ===
+
+        let preserve_existing_headers = config
             .get("preserveExistingHeaders")
             .and_then(Value::as_bool)
             .unwrap_or(true);
 
-        let size = config
+        let cache_size = config
             .get("cacheSize")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_CACHE_SIZE as u64);
-
-        if size == 0 {
-            self.cache = None;
-        } else {
-            let cache_size = NonZeroUsize::new(size as usize)
-                .unwrap_or(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap());
-            self.cache = Some(Rc::new(RefCell::new(LruCache::new(cache_size))));
-        }
 
         let services = config
             .get("services")
             .and_then(Value::as_array)
             .ok_or("Invalid or missing 'services' in configuration")?;
+
+        if services.is_empty() {
+            return Err("Services array cannot be empty".into());
+        }
+
+        // === Phase 2: Build new router (may fail, but self is untouched) ===
 
         let mut new_router = Router::new();
         for service in services {
@@ -132,27 +146,76 @@ impl OpenapiEndpointRoot {
                 .and_then(Value::as_str)
                 .ok_or("Missing 'name' in service configuration")?;
 
+            if service_name.is_empty() {
+                return Err("Service name cannot be empty".into());
+            }
+
             let paths = service
                 .get("paths")
                 .and_then(Value::as_object)
                 .ok_or("Invalid or missing 'paths' in service configuration")?;
 
+            if paths.is_empty() {
+                return Err(format!("Service '{}' has no paths", service_name).into());
+            }
+
             for (path, _) in paths {
+                // Validate path format
+                if !path.starts_with('/') {
+                    return Err(format!("Path must start with '/': {}", path).into());
+                }
+                if path.len() > 1024 {
+                    return Err(format!("Path too long (max 1024): {}", path).into());
+                }
+                if path.contains('\0') {
+                    return Err(format!("Path contains null character: {}", path).into());
+                }
+                if path.contains(' ') {
+                    return Err(format!("Path contains space (use %20): {}", path).into());
+                }
+                if path.contains('\n') || path.contains('\r') {
+                    return Err(format!("Path contains newline character: {}", path).into());
+                }
+
                 debug!(
                     "[oef] Inserting route: {} for service: {}",
                     path, service_name
                 );
-                new_router.insert(path, (path.clone(), Rc::new(service_name.to_string())))?;
+
+                // Insert route with better error message for duplicates
+                if let Err(e) = new_router.insert(path, (path.clone(), Rc::new(service_name.to_string()))) {
+                    return Err(format!(
+                        "Duplicate or conflicting route '{}' in service '{}': {}",
+                        path, service_name, e
+                    )
+                    .into());
+                }
             }
         }
+
+        // === Phase 3: Build new cache ===
+
+        let new_cache = if cache_size == 0 {
+            None
+        } else {
+            let size = NonZeroUsize::new(cache_size as usize)
+                .unwrap_or(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap());
+            Some(Rc::new(RefCell::new(LruCache::new(size))))
+        };
+
+        // === Phase 4: Apply all changes atomically ===
+        // All validations passed, now we can safely update self
+
         self.router = Rc::new(new_router);
+        self.cache = new_cache;
+        self.preserve_existing_headers = preserve_existing_headers;
 
         info!(
-            "[oef] Router configured successfully with {} services and cache size {}",
+            "[oef] ✅ Router configured successfully with {} services and cache size {}",
             services.len(),
             match &self.cache {
                 Some(cache) => cache.borrow().cap().to_string(),
-                None => "None".to_string(),
+                None => "0 (disabled)".to_string(),
             }
         );
         Ok(())
@@ -163,12 +226,24 @@ struct OpenapiEndpointFilter {
     router: Rc<Router<(String, Rc<String>)>>,
     cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
     preserve_existing_headers: bool,
+    config_error: Option<String>,
 }
 
 impl Context for OpenapiEndpointFilter {}
 
 impl HttpContext for OpenapiEndpointFilter {
     fn on_http_request_headers(&mut self, _nheaders: usize, _end_of_stream: bool) -> Action {
+        if let Some(code) = &self.config_error {
+            debug!("[oef] ({}) Bypassing due to config error", code);
+
+            // Set metric headers for monitoring config errors
+            self.set_http_request_header("x-api-endpoint", Some("config-error"));
+            self.set_http_request_header("x-service-name", Some("config-error"));
+            self.set_http_request_header("x-path-template", Some("config-error"));
+
+            return Action::Continue;
+        }
+
         debug!("[oef] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
         let method = self
@@ -207,8 +282,28 @@ impl HttpContext for OpenapiEndpointFilter {
 }
 
 impl OpenapiEndpointFilter {
+    fn normalize_path(path: &str) -> String {
+        // Remove query string and fragment
+        let without_query = path.split('?').next().unwrap_or("");
+        let without_fragment = without_query.split('#').next().unwrap_or("");
+
+        // Split by '/', filter out empty segments (removes duplicate slashes and trailing slash)
+        let segments: Vec<&str> = without_fragment
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Handle root path
+        if segments.is_empty() {
+            return "/".to_string();
+        }
+
+        // Reconstruct path with single slashes only
+        format!("/{}", segments.join("/"))
+    }
+
     fn get_path_template(&self, path: &str) -> Option<(String, Rc<String>)> {
-        let normalized_path = path.split('?').next().unwrap_or("").to_string();
+        let normalized_path = Self::normalize_path(path);
         if let Some(cache) = &self.cache {
             let mut cache = cache.borrow_mut();
             if let Some((matched_path, service_name)) = cache.get(&normalized_path) {
@@ -246,7 +341,6 @@ impl OpenapiEndpointFilter {
     }
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -315,6 +409,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         let test_cases = vec![
@@ -410,6 +505,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         let test_cases = vec![
@@ -447,6 +543,98 @@ mod tests {
     }
 
     #[test]
+    fn test_advanced_path_normalization() {
+        let test_cases = vec![
+            // Trailing slash
+            ("/users/", "/users"),
+            ("/products/", "/products"),
+            // Root path should remain as /
+            ("/", "/"),
+            // Fragment removal
+            ("/users#section", "/users"),
+            ("/products#top", "/products"),
+            // Duplicate slashes
+            ("/users//profile", "/users/profile"),
+            ("//users", "/users"),
+            ("/users///profile///", "/users/profile"),
+            ("///users///profile///", "/users/profile"),
+            // Combined: query + fragment + trailing slash
+            ("/users/?query=1#section", "/users"),
+            ("/products?a=1&b=2#top", "/products"),
+            // Combined: duplicate slashes + query + fragment
+            ("//users//profile//?key=value#section", "/users/profile"),
+            // Complex real-world cases
+            ("/api//v1///users/{id}/?format=json#details", "/api/v1/users/{id}"),
+            ("/dockebi/v1/stuff/{id_}//child/{child_id}/hello/?test=1", "/dockebi/v1/stuff/{id_}/child/{child_id}/hello"),
+        ];
+
+        for (input, expected) in test_cases {
+            let result = OpenapiEndpointFilter::normalize_path(input);
+            assert_eq!(
+                result, expected,
+                "normalize_path('{}') should return '{}' but got '{}'",
+                input, expected, result
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalized_path_matching() {
+        let mut root_ctx = OpenapiEndpointRoot::new();
+        root_ctx
+            .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
+            .unwrap();
+
+        let http_ctx = OpenapiEndpointFilter {
+            router: Rc::clone(&root_ctx.router),
+            cache: root_ctx.cache.as_ref().map(Rc::clone),
+            preserve_existing_headers: true,
+            config_error: None,
+        };
+
+        // Test that normalized paths match correctly
+        let test_cases = vec![
+            // Trailing slash should match
+            (
+                "/users/",
+                Some(("/users".to_string(), Rc::new("userservice".to_string()))),
+            ),
+            // Fragment should be ignored
+            (
+                "/users#section",
+                Some(("/users".to_string(), Rc::new("userservice".to_string()))),
+            ),
+            // Duplicate slashes should match
+            (
+                "/users//42",
+                Some((
+                    "/users/{id}".to_string(),
+                    Rc::new("userservice".to_string()),
+                )),
+            ),
+            // Combined normalization
+            (
+                "/users/42//profile/?query=1#section",
+                Some((
+                    "/users/{id}/profile".to_string(),
+                    Rc::new("userservice".to_string()),
+                )),
+            ),
+            // Root path
+            ("/", None),
+        ];
+
+        for (input_path, expected) in test_cases {
+            let result = http_ctx.get_path_template(input_path);
+            assert_eq!(
+                result, expected,
+                "Path '{}' should match '{:?}' but got '{:?}'",
+                input_path, expected, result
+            );
+        }
+    }
+
+    #[test]
     fn test_cache_behavior() {
         let mut root_ctx = OpenapiEndpointRoot::new();
         root_ctx
@@ -457,6 +645,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         // First access - should go to the router
@@ -539,6 +728,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         // The path should still match correctly even with cache disabled
@@ -572,6 +762,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         let test_cases = vec![
@@ -657,6 +848,101 @@ mod tests {
                 }),
                 "Invalid or missing 'paths' in service configuration",
             ),
+            // Empty services array
+            (
+                json!({
+                    "services": []
+                }),
+                "Services array cannot be empty",
+            ),
+            // Empty service name
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "",
+                            "paths": {
+                                "/test": {}
+                            }
+                        }
+                    ]
+                }),
+                "Service name cannot be empty",
+            ),
+            // Empty paths object
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test",
+                            "paths": {}
+                        }
+                    ]
+                }),
+                "has no paths",
+            ),
+            // Path not starting with /
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test",
+                            "paths": {
+                                "test": {}
+                            }
+                        }
+                    ]
+                }),
+                "must start with '/'",
+            ),
+            // Path too long
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test",
+                            "paths": {
+                                format!("/{}", "x".repeat(1024)): {}
+                            }
+                        }
+                    ]
+                }),
+                "too long",
+            ),
+            // Path with space
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "test",
+                            "paths": {
+                                "/test path": {}
+                            }
+                        }
+                    ]
+                }),
+                "contains space",
+            ),
+            // Duplicate paths
+            (
+                json!({
+                    "services": [
+                        {
+                            "name": "service1",
+                            "paths": {
+                                "/test": {}
+                            }
+                        },
+                        {
+                            "name": "service2",
+                            "paths": {
+                                "/test": {}
+                            }
+                        }
+                    ]
+                }),
+                "Duplicate or conflicting route",
+            ),
         ];
 
         for (config, expected_error) in test_cases {
@@ -702,6 +988,7 @@ mod tests {
             router: Rc::clone(&root_ctx.router),
             cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
+            config_error: None,
         };
 
         // For exact path matches, the first service should win
