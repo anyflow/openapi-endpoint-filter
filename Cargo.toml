@@ -18,7 +18,7 @@ path = "src/lib.rs"              # Library source location
 [dependencies]
 proxy-wasm = "0.2.3"
 serde_json = "1.0.142"
-matchit = "0.8.6"
+matchit = "0.9.1"
 log = "0.4.27"
 
 [dev-dependencies]
