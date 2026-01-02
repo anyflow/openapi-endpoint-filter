@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.0](https://github.com/anyflow/openapi-endpoint-filter/commit/a6512ec) (2026-01-03)
+## [0.4.0](https://github.com/anyflow/openapi-endpoint-filter/commit/eccdaa3) (2026-01-03)
 
 ### Features
 - OpenAPI 3.0 `servers`/`variables` 기반 host/basePath 매칭 지원

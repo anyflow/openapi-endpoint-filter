@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::config::{insert_route, parse_methods, parse_servers, strip_port};
-use crate::router::{RouteGroup, RouterSet};
+use crate::router::{normalize_path, RouteGroup, RouterSet};
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
@@ -177,6 +177,7 @@ impl OpenapiEndpointRoot {
                 }
 
                 let methods = parse_methods(path, path_config)?;
+                let normalized_path = normalize_path(path);
 
                 for server in &server_specs {
                     let host_key = if use_host_in_match {
@@ -192,7 +193,7 @@ impl OpenapiEndpointRoot {
                     if methods.is_empty() {
                         insert_route(
                             &mut group.any_method,
-                            path,
+                            &normalized_path,
                             Rc::clone(&service_name),
                         )?;
                     } else {
@@ -201,7 +202,7 @@ impl OpenapiEndpointRoot {
                                 .methods
                                 .entry(method.clone())
                                 .or_insert_with(Router::new);
-                            insert_route(router, path, Rc::clone(&service_name))?;
+                            insert_route(router, &normalized_path, Rc::clone(&service_name))?;
                         }
                     }
                 }
@@ -499,6 +500,39 @@ mod tests {
                 input_path, expected, result
             );
         }
+    }
+
+    #[test]
+    fn test_config_path_normalization() {
+        let config = json!({
+            "services": [
+                {
+                    "name": "userservice",
+                    "paths": {
+                        "/users/": {},
+                        "/api//v1/data": {}
+                    }
+                }
+            ]
+        });
+
+        let mut root_ctx = OpenapiEndpointRoot::new();
+        root_ctx.configure(&config).unwrap();
+
+        let http_ctx = OpenapiEndpointFilter {
+            router_set: Rc::clone(&root_ctx.router_set),
+            preserve_existing_headers: true,
+            config_error: None,
+        };
+
+        assert_eq!(
+            http_ctx.get_path_template(None, "get", "/users"),
+            Some(("/users".to_string(), Rc::new("userservice".to_string())))
+        );
+        assert_eq!(
+            http_ctx.get_path_template(None, "get", "/api/v1/data"),
+            Some(("/api/v1/data".to_string(), Rc::new("userservice".to_string())))
+        );
     }
 
     #[test]

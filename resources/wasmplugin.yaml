@@ -7,7 +7,7 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/openapi-endpoint-filter:0.3.2
+  url: anyflow/openapi-endpoint-filter:0.4.0
   imagePullPolicy: Always
   phase: STATS # (Recommended) Apply before the istio.stats filter
   failStrategy: FAIL_OPEN # (Recommended) Bypass the filter on fatal errors
