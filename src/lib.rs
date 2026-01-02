@@ -1,14 +1,9 @@
 use log::{debug, error, info};
-use lru::LruCache;
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde_json::Value;
-use std::cell::RefCell;
-use std::num::NonZeroUsize;
 use std::rc::Rc;
-
-static DEFAULT_CACHE_SIZE: usize = 1024;
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
@@ -19,7 +14,6 @@ proxy_wasm::main! {{
 
 struct OpenapiEndpointRoot {
     router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
-    cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
     preserve_existing_headers: bool,
     config_error: Option<String>,
 }
@@ -28,9 +22,6 @@ impl OpenapiEndpointRoot {
     fn new() -> Self {
         Self {
             router: Rc::new(Router::new()),
-            cache: Some(Rc::new(RefCell::new(LruCache::new(
-                NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
-            )))),
             preserve_existing_headers: true,
             config_error: None,
         }
@@ -107,7 +98,6 @@ impl RootContext for OpenapiEndpointRoot {
         debug!("[oef] Creating HTTP context");
         Some(Box::new(OpenapiEndpointFilter {
             router: Rc::clone(&self.router),
-            cache: self.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: self.preserve_existing_headers,
             config_error: self.config_error.clone(),
         }))
@@ -122,11 +112,6 @@ impl OpenapiEndpointRoot {
             .get("preserveExistingHeaders")
             .and_then(Value::as_bool)
             .unwrap_or(true);
-
-        let cache_size = config
-            .get("cacheSize")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_CACHE_SIZE as u64);
 
         let services = config
             .get("services")
@@ -193,30 +178,15 @@ impl OpenapiEndpointRoot {
             }
         }
 
-        // === Phase 3: Build new cache ===
-
-        let new_cache = if cache_size == 0 {
-            None
-        } else {
-            let size = NonZeroUsize::new(cache_size as usize)
-                .unwrap_or(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap());
-            Some(Rc::new(RefCell::new(LruCache::new(size))))
-        };
-
-        // === Phase 4: Apply all changes atomically ===
+        // === Phase 3: Apply all changes atomically ===
         // All validations passed, now we can safely update self
 
         self.router = Rc::new(new_router);
-        self.cache = new_cache;
         self.preserve_existing_headers = preserve_existing_headers;
 
         info!(
-            "[oef] ✅ Router configured successfully with {} services and cache size {}",
-            services.len(),
-            match &self.cache {
-                Some(cache) => cache.borrow().cap().to_string(),
-                None => "0 (disabled)".to_string(),
-            }
+            "[oef] ✅ Router configured successfully with {} services",
+            services.len()
         );
         Ok(())
     }
@@ -224,7 +194,6 @@ impl OpenapiEndpointRoot {
 
 struct OpenapiEndpointFilter {
     router: Rc<Router<(String, Rc<String>)>>,
-    cache: Option<Rc<RefCell<LruCache<String, (String, Rc<String>)>>>>,
     preserve_existing_headers: bool,
     config_error: Option<String>,
 }
@@ -304,31 +273,11 @@ impl OpenapiEndpointFilter {
 
     fn get_path_template(&self, path: &str) -> Option<(String, Rc<String>)> {
         let normalized_path = Self::normalize_path(path);
-        if let Some(cache) = &self.cache {
-            let mut cache = cache.borrow_mut();
-            if let Some((matched_path, service_name)) = cache.get(&normalized_path) {
-                debug!(
-                    "[oef] Cache hit for path: {}, value: ({}, {})",
-                    normalized_path, matched_path, service_name
-                );
-                return Some((matched_path.clone(), Rc::clone(&service_name)));
-            }
-        }
-        debug!(
-            "[oef] Cache miss or cache disabled for path: {}",
-            normalized_path
-        );
         match self.router.at(&normalized_path) {
             Ok(matched) => {
                 let (matched_path, service_name) = matched.value.clone();
-                if let Some(cache) = &self.cache {
-                    cache.borrow_mut().put(
-                        normalized_path,
-                        (matched_path.clone(), Rc::clone(&service_name)),
-                    );
-                }
                 debug!(
-                    "[oef] {} matched and cached with {}, {}",
+                    "[oef] {} matched with {}, {}",
                     path, service_name, matched_path
                 );
                 Some((matched_path, service_name))
@@ -375,29 +324,6 @@ mod tests {
         ]
     }"#;
 
-    const MINIMAL_CONFIG: &str = r#"{
-        "services": [
-            {
-                "name": "minimal",
-                "paths": {
-                    "/test": {}
-                }
-            }
-        ]
-    }"#;
-
-    const DISABLE_CACHE_CONFIG: &str = r#"{
-        "cacheSize": 0,
-        "services": [
-            {
-                "name": "nocache",
-                "paths": {
-                    "/api/v1/test": {}
-                }
-            }
-        ]
-    }"#;
-
     #[test]
     fn test_basic_path_and_service_matching() {
         let mut root_ctx = OpenapiEndpointRoot::new();
@@ -407,7 +333,6 @@ mod tests {
 
         let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -503,7 +428,6 @@ mod tests {
 
         let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -587,7 +511,6 @@ mod tests {
 
         let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -635,112 +558,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_behavior() {
-        let mut root_ctx = OpenapiEndpointRoot::new();
-        root_ctx
-            .configure(&serde_json::from_str(TEST_CONFIG).unwrap())
-            .unwrap();
-
-        let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
-            preserve_existing_headers: true,
-            config_error: None,
-        };
-
-        // First access - should go to the router
-        let path1 = "/dockebi/v1/stuff/123";
-        let result1 = http_ctx.get_path_template(path1);
-        assert_eq!(
-            result1,
-            Some((
-                "/dockebi/v1/stuff/{id_}".to_string(),
-                Rc::new("dockebi".to_string())
-            ))
-        );
-
-        // Second access - should be served from cache
-        let result2 = http_ctx.get_path_template(path1);
-        assert_eq!(
-            result2,
-            Some((
-                "/dockebi/v1/stuff/{id_}".to_string(),
-                Rc::new("dockebi".to_string())
-            ))
-        );
-
-        // Verify cache state
-        if let Some(cache) = &root_ctx.cache {
-            assert_eq!(cache.borrow().len(), 1);
-            assert_eq!(cache.borrow().cap().get(), 5);
-
-            // Check that the item is in the cache
-            assert!(cache.borrow().contains(&path1.to_string()));
-        } else {
-            panic!("Cache should be enabled");
-        }
-
-        // Fill up the cache and test LRU behavior
-        http_ctx.get_path_template("/users"); // 2nd item
-        http_ctx.get_path_template("/users/1"); // 3rd item
-        http_ctx.get_path_template("/products"); // 4th item
-        http_ctx.get_path_template("/products/123"); // 5th item
-
-        // This should evict the oldest item (path1)
-        http_ctx.get_path_template("/categories/tech/products");
-
-        if let Some(cache) = &root_ctx.cache {
-            assert_eq!(cache.borrow().len(), 5);
-            // The oldest item should be evicted
-            assert!(!cache.borrow().contains(&path1.to_string()));
-        } else {
-            panic!("Cache should be enabled");
-        }
-    }
-
-    #[test]
-    fn test_default_cache_size() {
-        let mut root_ctx = OpenapiEndpointRoot::new();
-        root_ctx
-            .configure(&serde_json::from_str(MINIMAL_CONFIG).unwrap())
-            .unwrap();
-
-        if let Some(cache) = &root_ctx.cache {
-            assert_eq!(cache.borrow().cap().get(), DEFAULT_CACHE_SIZE);
-        } else {
-            panic!("Cache should be enabled by default");
-        }
-    }
-
-    #[test]
-    fn test_disabled_cache() {
-        let mut root_ctx = OpenapiEndpointRoot::new();
-        root_ctx
-            .configure(&serde_json::from_str(DISABLE_CACHE_CONFIG).unwrap())
-            .unwrap();
-
-        assert!(
-            root_ctx.cache.is_none(),
-            "Cache should be disabled when cache_size is 0"
-        );
-
-        let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
-            preserve_existing_headers: true,
-            config_error: None,
-        };
-
-        // The path should still match correctly even with cache disabled
-        let path = "/api/v1/test";
-        let result = http_ctx.get_path_template(path);
-        assert_eq!(
-            result,
-            Some(("/api/v1/test".to_string(), Rc::new("nocache".to_string())))
-        );
-    }
-
-    #[test]
     fn test_complex_path_patterns() {
         let config = json!({
             "services": [
@@ -760,7 +577,6 @@ mod tests {
 
         let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -986,7 +802,6 @@ mod tests {
 
         let http_ctx = OpenapiEndpointFilter {
             router: Rc::clone(&root_ctx.router),
-            cache: root_ctx.cache.as_ref().map(Rc::clone),
             preserve_existing_headers: true,
             config_error: None,
         };
