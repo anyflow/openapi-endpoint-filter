@@ -17,12 +17,11 @@ A Rust-based Istio/Envoy Proxy-Wasm plugin that injects the OpenAPI-derived API 
 - **High-Performance Path Matching**: Utilizes the Radix tree-based path matching algorithm via the `matchit` crate, [whose own benchmarks report it as the fastest](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks).
 - **Uses OpenAPI Path Syntax**: There is no need to transform OpenAPI documents. You can insert them directly into the config as-is (although removing items other than path templates is recommended for readability). Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 - **Support for Multiple OpenAPI Documents**: The `name` field represents the service name of the respective OpenAPI document and is added as the `x-service-name` request header, which can be used in the same manner as `x-api-endpoint` for Istio metric labels. Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
-- **LRU Cache Support**: Cache size can be adjusted via config. Refer to [`./resources/wasmplugin.yaml`](./resources/wasmplugin.yaml).
 
 ## Configuration for Istio
 
 - **`wasmplugin.yaml`**: Register OpenAPI path templates and service names. You can specify multiple services and their paths at once.
-  - `cacheSize`: LRU cache size for path matching results
+  - `useHostInMatch`: Whether to match request host against servers.url host (default: true)
   - `services`: List of service names and their OpenAPI path templates
 - **`telemetry.yaml`**: Maps the headers added by the plugin (`x-api-endpoint`, `x-path-template`, `x-service-name`) to Istio metric labels using `tagOverrides`.
 
@@ -62,7 +61,7 @@ DOCKER_IMAGE_PATH=anyflow/openapi-endpoint-filter
 # Apply resources/wasmplugin.yaml: Check the logs to confirm successful loading, e.g., "[oef] Router configured successfully".
 > kubectl apply -f wasmplugin.yaml
 
-# Make a curl request and verify if the matching success log appears, e.g., "[oef] /dockebi/v1/stuff matched and cached with dockebi, /dockebi/v1/stuff".
+# Make a curl request and verify if the matching success log appears, e.g., "[oef] /dockebi/v1/stuff matched with dockebi, /dockebi/v1/stuff".
 ```
 
 ## Notes

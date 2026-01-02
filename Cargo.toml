@@ -4,7 +4,6 @@ version = "0.3.2"
 authors = ["Park Hyunjeong <anyflow@gmail.com>"]
 readme = "README.md"
 license = "Apache-2.0"
-license-file = "LICENSE"
 repository = "https://github.com/anyflow/openapi-endpoint-filter"
 edition = "2021"
 

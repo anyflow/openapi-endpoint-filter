@@ -1,9 +1,16 @@
+mod config;
+mod router;
+
 use log::{debug, error, info};
 use matchit::Router;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::rc::Rc;
+
+use crate::config::{insert_route, parse_methods, parse_servers, strip_port};
+use crate::router::{RouteGroup, RouterSet};
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Trace);
@@ -13,7 +20,7 @@ proxy_wasm::main! {{
 }}
 
 struct OpenapiEndpointRoot {
-    router: Rc<Router<(String, Rc<String>)>>, // (path_template, service_name)
+    router_set: Rc<RouterSet>,
     preserve_existing_headers: bool,
     config_error: Option<String>,
 }
@@ -21,7 +28,7 @@ struct OpenapiEndpointRoot {
 impl OpenapiEndpointRoot {
     fn new() -> Self {
         Self {
-            router: Rc::new(Router::new()),
+            router_set: Rc::new(RouterSet::new()),
             preserve_existing_headers: true,
             config_error: None,
         }
@@ -97,7 +104,7 @@ impl RootContext for OpenapiEndpointRoot {
     fn create_http_context(&self, _: u32) -> Option<Box<dyn HttpContext>> {
         debug!("[oef] Creating HTTP context");
         Some(Box::new(OpenapiEndpointFilter {
-            router: Rc::clone(&self.router),
+            router_set: Rc::clone(&self.router_set),
             preserve_existing_headers: self.preserve_existing_headers,
             config_error: self.config_error.clone(),
         }))
@@ -112,6 +119,10 @@ impl OpenapiEndpointRoot {
             .get("preserveExistingHeaders")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        let use_host_in_match = config
+            .get("useHostInMatch")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
 
         let services = config
             .get("services")
@@ -124,7 +135,7 @@ impl OpenapiEndpointRoot {
 
         // === Phase 2: Build new router (may fail, but self is untouched) ===
 
-        let mut new_router = Router::new();
+        let mut groups: HashMap<(Option<String>, String), RouteGroup> = HashMap::new();
         for service in services {
             let service_name = service
                 .get("name")
@@ -135,6 +146,9 @@ impl OpenapiEndpointRoot {
                 return Err("Service name cannot be empty".into());
             }
 
+            let server_specs = parse_servers(service)?;
+            let service_name = Rc::new(service_name.to_string());
+
             let paths = service
                 .get("paths")
                 .and_then(Value::as_object)
@@ -144,7 +158,7 @@ impl OpenapiEndpointRoot {
                 return Err(format!("Service '{}' has no paths", service_name).into());
             }
 
-            for (path, _) in paths {
+            for (path, path_config) in paths {
                 // Validate path format
                 if !path.starts_with('/') {
                     return Err(format!("Path must start with '/': {}", path).into());
@@ -162,18 +176,34 @@ impl OpenapiEndpointRoot {
                     return Err(format!("Path contains newline character: {}", path).into());
                 }
 
-                debug!(
-                    "[oef] Inserting route: {} for service: {}",
-                    path, service_name
-                );
+                let methods = parse_methods(path, path_config)?;
 
-                // Insert route with better error message for duplicates
-                if let Err(e) = new_router.insert(path, (path.clone(), Rc::new(service_name.to_string()))) {
-                    return Err(format!(
-                        "Duplicate or conflicting route '{}' in service '{}': {}",
-                        path, service_name, e
-                    )
-                    .into());
+                for server in &server_specs {
+                    let host_key = if use_host_in_match {
+                        server.host.clone()
+                    } else {
+                        None
+                    };
+                    let key = (host_key, server.base_path.clone());
+                    let group = groups
+                        .entry(key)
+                        .or_insert_with(|| RouteGroup::new(server.base_path.clone()));
+
+                    if methods.is_empty() {
+                        insert_route(
+                            &mut group.any_method,
+                            path,
+                            Rc::clone(&service_name),
+                        )?;
+                    } else {
+                        for method in &methods {
+                            let router = group
+                                .methods
+                                .entry(method.clone())
+                                .or_insert_with(Router::new);
+                            insert_route(router, path, Rc::clone(&service_name))?;
+                        }
+                    }
                 }
             }
         }
@@ -181,7 +211,17 @@ impl OpenapiEndpointRoot {
         // === Phase 3: Apply all changes atomically ===
         // All validations passed, now we can safely update self
 
-        self.router = Rc::new(new_router);
+        let mut by_host: HashMap<Option<String>, Vec<RouteGroup>> = HashMap::new();
+        for ((host, _base_path), group) in groups {
+            by_host.entry(host).or_default().push(group);
+        }
+        for groups in by_host.values_mut() {
+            groups.sort_by_key(|group| std::cmp::Reverse(group.base_path.len()));
+        }
+
+        self.router_set = Rc::new(RouterSet {
+            by_host,
+        });
         self.preserve_existing_headers = preserve_existing_headers;
 
         info!(
@@ -193,7 +233,7 @@ impl OpenapiEndpointRoot {
 }
 
 struct OpenapiEndpointFilter {
-    router: Rc<Router<(String, Rc<String>)>>,
+    router_set: Rc<RouterSet>,
     preserve_existing_headers: bool,
     config_error: Option<String>,
 }
@@ -215,11 +255,19 @@ impl HttpContext for OpenapiEndpointFilter {
 
         debug!("[oef] Getting the path from header");
         let path = self.get_http_request_header(":path").unwrap_or_default();
-        let method = self
+        let method_header = self
             .get_http_request_header(":method")
             .unwrap_or("unknown".to_string());
+        let method = method_header.to_ascii_lowercase();
+        let host_header = self
+            .get_http_request_header(":authority")
+            .or_else(|| self.get_http_request_header("host"));
+        let host = host_header
+            .as_deref()
+            .and_then(OpenapiEndpointFilter::normalize_host);
+
         let (path_template, service_name) = self
-            .get_path_template(&path)
+            .get_path_template(host.as_deref(), &method, &path)
             .map(|(matched_path, service_name)| (matched_path, service_name))
             .unwrap_or(("unknown".to_string(), Rc::new("unknown".to_string())));
 
@@ -241,7 +289,7 @@ impl HttpContext for OpenapiEndpointFilter {
                 Some(&if method == "unknown" && path_template == "unknown" {
                     "unknown".to_string()
                 } else {
-                    format!("{} {}", method, path_template)
+                    format!("{} {}", method_header, path_template)
                 }),
             );
         }
@@ -251,47 +299,34 @@ impl HttpContext for OpenapiEndpointFilter {
 }
 
 impl OpenapiEndpointFilter {
-    fn normalize_path(path: &str) -> String {
-        // Remove query string and fragment
-        let without_query = path.split('?').next().unwrap_or("");
-        let without_fragment = without_query.split('#').next().unwrap_or("");
-
-        // Split by '/', filter out empty segments (removes duplicate slashes and trailing slash)
-        let segments: Vec<&str> = without_fragment
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        // Handle root path
-        if segments.is_empty() {
-            return "/".to_string();
-        }
-
-        // Reconstruct path with single slashes only
-        format!("/{}", segments.join("/"))
+    fn get_path_template(
+        &self,
+        host: Option<&str>,
+        method: &str,
+        path: &str,
+    ) -> Option<(String, Rc<String>)> {
+        self.router_set.match_route(host, method, path)
     }
 
-    fn get_path_template(&self, path: &str) -> Option<(String, Rc<String>)> {
-        let normalized_path = Self::normalize_path(path);
-        match self.router.at(&normalized_path) {
-            Ok(matched) => {
-                let (matched_path, service_name) = matched.value.clone();
-                debug!(
-                    "[oef] {} matched with {}, {}",
-                    path, service_name, matched_path
-                );
-                Some((matched_path, service_name))
-            }
-            Err(_) => {
-                debug!("[oef] No match found for path: {}", normalized_path);
-                None
-            }
+    fn normalize_host(host: &str) -> Option<String> {
+        let trimmed = host.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        let host = strip_port(&lower);
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
         }
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::router::normalize_path;
     use serde_json::json;
 
     const TEST_CONFIG: &str = r#"{
@@ -332,7 +367,7 @@ mod tests {
             .unwrap();
 
         let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
+            router_set: Rc::clone(&root_ctx.router_set),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -410,7 +445,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_path_template(input_path);
+            let result = http_ctx.get_path_template(None, "get", input_path);
             assert_eq!(
                 result, expected,
                 "Path '{}' should match '{:?}' but got '{:?}'",
@@ -427,7 +462,7 @@ mod tests {
             .unwrap();
 
         let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
+            router_set: Rc::clone(&root_ctx.router_set),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -457,7 +492,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_path_template(input_path);
+            let result = http_ctx.get_path_template(None, "get", input_path);
             assert_eq!(
                 result, expected,
                 "Path with query params '{}' should match '{:?}' but got '{:?}'",
@@ -493,7 +528,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = OpenapiEndpointFilter::normalize_path(input);
+            let result = normalize_path(input);
             assert_eq!(
                 result, expected,
                 "normalize_path('{}') should return '{}' but got '{}'",
@@ -510,7 +545,7 @@ mod tests {
             .unwrap();
 
         let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
+            router_set: Rc::clone(&root_ctx.router_set),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -548,7 +583,7 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_path_template(input_path);
+            let result = http_ctx.get_path_template(None, "get", input_path);
             assert_eq!(
                 result, expected,
                 "Path '{}' should match '{:?}' but got '{:?}'",
@@ -576,7 +611,7 @@ mod tests {
         root_ctx.configure(&config).unwrap();
 
         let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
+            router_set: Rc::clone(&root_ctx.router_set),
             preserve_existing_headers: true,
             config_error: None,
         };
@@ -609,13 +644,105 @@ mod tests {
         ];
 
         for (input_path, expected) in test_cases {
-            let result = http_ctx.get_path_template(input_path);
+            let result = http_ctx.get_path_template(None, "get", input_path);
             assert_eq!(
                 result, expected,
                 "Complex path '{}' should match '{:?}' but got '{:?}'",
                 input_path, expected, result
             );
         }
+    }
+
+    #[test]
+    fn test_servers_and_method_matching() {
+        let config = json!({
+            "services": [
+                {
+                    "name": "userservice",
+                    "servers": [
+                        {
+                            "url": "https://{env}.example.com/v1",
+                            "variables": {
+                                "env": {
+                                    "default": "api",
+                                    "enum": ["api", "staging"]
+                                }
+                            }
+                        }
+                    ],
+                    "paths": {
+                        "/users": {
+                            "get": {}
+                        },
+                        "/admin": {}
+                    }
+                }
+            ]
+        });
+
+        let mut root_ctx = OpenapiEndpointRoot::new();
+        root_ctx.configure(&config).unwrap();
+
+        let http_ctx = OpenapiEndpointFilter {
+            router_set: Rc::clone(&root_ctx.router_set),
+            preserve_existing_headers: true,
+            config_error: None,
+        };
+
+        assert_eq!(
+            http_ctx.get_path_template(Some("api.example.com"), "get", "/v1/users"),
+            Some(("/users".to_string(), Rc::new("userservice".to_string())))
+        );
+        assert_eq!(
+            http_ctx.get_path_template(Some("staging.example.com"), "post", "/v1/admin"),
+            Some(("/admin".to_string(), Rc::new("userservice".to_string())))
+        );
+        assert_eq!(
+            http_ctx.get_path_template(Some("api.example.com"), "post", "/v1/users"),
+            None
+        );
+        assert_eq!(
+            http_ctx.get_path_template(Some("api.example.com"), "get", "/users"),
+            None
+        );
+        assert_eq!(
+            http_ctx.get_path_template(Some("other.example.com"), "get", "/v1/users"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_host_matching_disabled() {
+        let config = json!({
+            "useHostInMatch": false,
+            "services": [
+                {
+                    "name": "userservice",
+                    "servers": [
+                        { "url": "https://api.example.com/v1" }
+                    ],
+                    "paths": {
+                        "/users": {
+                            "get": {}
+                        }
+                    }
+                }
+            ]
+        });
+
+        let mut root_ctx = OpenapiEndpointRoot::new();
+        root_ctx.configure(&config).unwrap();
+
+        let http_ctx = OpenapiEndpointFilter {
+            router_set: Rc::clone(&root_ctx.router_set),
+            preserve_existing_headers: true,
+            config_error: None,
+        };
+
+        assert_eq!(
+            http_ctx.get_path_template(Some("other.example.com"), "get", "/v1/users"),
+            Some(("/users".to_string(), Rc::new("userservice".to_string())))
+        );
     }
 
     #[test]
@@ -801,14 +928,14 @@ mod tests {
         root_ctx.configure(&config).unwrap();
 
         let http_ctx = OpenapiEndpointFilter {
-            router: Rc::clone(&root_ctx.router),
+            router_set: Rc::clone(&root_ctx.router_set),
             preserve_existing_headers: true,
             config_error: None,
         };
 
         // For exact path matches, the first service should win
         assert_eq!(
-            http_ctx.get_path_template("/api/v1/shared"),
+            http_ctx.get_path_template(None, "get", "/api/v1/shared"),
             Some((
                 "/api/v1/shared".to_string(),
                 Rc::new("service1".to_string())
@@ -817,7 +944,7 @@ mod tests {
 
         // For parameterized paths, the match should work correctly
         assert_eq!(
-            http_ctx.get_path_template("/api/v1/shared/123"),
+            http_ctx.get_path_template(None, "get", "/api/v1/shared/123"),
             Some((
                 "/api/v1/shared/{id}".to_string(),
                 Rc::new("service2".to_string())
@@ -826,7 +953,7 @@ mod tests {
 
         // Service-specific paths should go to the correct service
         assert_eq!(
-            http_ctx.get_path_template("/api/v1/service1/specific"),
+            http_ctx.get_path_template(None, "get", "/api/v1/service1/specific"),
             Some((
                 "/api/v1/service1/specific".to_string(),
                 Rc::new("service1".to_string())
@@ -834,7 +961,7 @@ mod tests {
         );
 
         assert_eq!(
-            http_ctx.get_path_template("/api/v1/service2/specific"),
+            http_ctx.get_path_template(None, "get", "/api/v1/service2/specific"),
             Some((
                 "/api/v1/service2/specific".to_string(),
                 Rc::new("service2".to_string())

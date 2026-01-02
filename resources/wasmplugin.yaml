@@ -7,7 +7,7 @@ spec:
   selector:
     matchLabels:
       app: gateway
-  url: anyflow/openapi-endpoint-filter:0.3.0
+  url: anyflow/openapi-endpoint-filter:0.3.2
   imagePullPolicy: Always
   phase: STATS # (Recommended) Apply before the istio.stats filter
   failStrategy: FAIL_OPEN # (Recommended) Bypass the filter on fatal errors
@@ -16,12 +16,21 @@ spec:
   # priority: 10
   pluginConfig:
     preserveExistingHeaders: true # (Optional) Preserve existing headers. Default is true.
-    cacheSize: 5 # (Optional) LRU cache size for path matching results. Default is 1024. Set 0 to disable cache.
+    useHostInMatch: true # (Optional) Match request host against servers.url host. Default is true.
     services: # (Required) Register OpenAPI path templates for multiple services
       - name: dockebi # (Required) Service name, added as x-service-name header
+        servers: # (Optional, OpenAPI 3.0+) Server URLs for host/basePath matching
+          - url: https://{env}.example.com/v1
+            variables:
+              env:
+                default: api
+                enum: [api, staging]
         paths: # (Required) List OpenAPI path templates as-is
-          /dockebi/v1/stuff: {}
-          /dockebi/v1/stuff/{id_}: {}
+          /dockebi/v1/stuff:
+            get: {}
+            post: {}
+          /dockebi/v1/stuff/{id_}:
+            get: {}
           /dockebi/v1/stuff/{id_}/child/{child_id}/hello: {}
       - name: userservice
         paths:

@@ -2,6 +2,7 @@ target/**
 
 .venv
 .vscode
+.claude
 .env
 
 .DS_Store
