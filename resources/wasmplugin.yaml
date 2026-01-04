@@ -1,13 +1,13 @@
 apiVersion: extensions.istio.io/v1alpha1
 kind: WasmPlugin
 metadata:
-  name: openapi-endpoint-filter
-  namespace: cluster
+  name: openapi-endpoint-filter # (Optional) Change if you want a custom name
+  namespace: cluster # (Optional) Set if you want a specific namespace (defaults to current)
 spec:
   selector:
     matchLabels:
-      app: gateway
-  url: anyflow/openapi-endpoint-filter:0.4.0
+      app: gateway # (Required) Update to match your proxy/workload labels
+  url: anyflow/openapi-endpoint-filter:0.4.0 # (Required) Update to the image tag you want to use
   imagePullPolicy: Always
   phase: STATS # (Recommended) Apply before the istio.stats filter
   failStrategy: FAIL_OPEN # (Recommended) Bypass the filter on fatal errors
@@ -17,7 +17,7 @@ spec:
   pluginConfig:
     preserveExistingHeaders: true # (Optional) Preserve existing headers. Default is true.
     useHostInMatch: true # (Optional) Match request host against servers.url host. Default is true.
-    services: # (Required) Register OpenAPI path templates for multiple services
+    services: # (Required) Update with your OpenAPI paths/servers
       - name: dockebi # (Required) Service name, added as x-service-name header
         servers: # (Optional, OpenAPI 3.0+) Server URLs for host/basePath matching
           - url: https://{env}.example.com/v1
