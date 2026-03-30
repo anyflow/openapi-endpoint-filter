@@ -167,7 +167,7 @@ For detailed examples, refer to each config file in [resources](./resources/) di
 
 ## Use Prebuilt Image
 
-You can use the published image `anyflow/openapi-endpoint-filter:<version>` without building locally. Refer to [`resources/wasmplugin.yaml`](./resources/wasmplugin.yaml) for configuration.
+You can use the published image `ghcr.io/anyflow/openapi-endpoint-filter:<version>` without building locally. Refer to [`resources/wasmplugin.yaml`](./resources/wasmplugin.yaml) for configuration.
 
 ## Build & Publish
 
@@ -182,7 +182,7 @@ You can use the published image `anyflow/openapi-endpoint-filter:<version>` with
 > brew install binaryen
 
 # Create a .env file at the root and set DOCKER_IMAGE_PATH. Example below:
-DOCKER_IMAGE_PATH=anyflow/openapi-endpoint-filter
+DOCKER_IMAGE_PATH=ghcr.io/anyflow/openapi-endpoint-filter
 
 # Run tests -> Rust build -> Image optimization -> Docker build -> Docker push
 > cargo make deploy
